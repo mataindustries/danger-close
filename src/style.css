@@ -246,11 +246,38 @@ button {
   font-weight: 500;
 }
 
+.hull-readout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hull-readout b {
+  color: #536f75;
+  font-size: 0.56rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  transition:
+    color 180ms ease,
+    text-shadow 180ms ease;
+}
+
+.hull-readout b.is-active {
+  color: #68d5ff;
+  text-shadow: 0 0 10px rgba(80, 199, 255, 0.72);
+}
+
 .health-track {
   height: 7px;
   overflow: hidden;
   border: 1px solid rgba(112, 237, 244, 0.26);
   background: rgba(1, 5, 6, 0.68);
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.health-panel.has-shield .health-track {
+  border-color: rgba(93, 204, 255, 0.65);
+  box-shadow: 0 0 10px rgba(79, 188, 239, 0.18);
 }
 
 .health-fill {
@@ -305,6 +332,10 @@ button {
   color: var(--green);
 }
 
+.scrap-stat strong {
+  color: #e8aa69;
+}
+
 .onboarding-hint {
   position: absolute;
   z-index: 6;
@@ -347,6 +378,90 @@ button {
   opacity: 0;
 }
 
+.reactor-status {
+  position: absolute;
+  z-index: 7;
+  top: 102px;
+  left: 50%;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  width: min(300px, calc(100% - 32px));
+  padding: 9px 13px 11px;
+  overflow: hidden;
+  pointer-events: none;
+  border: 1px solid rgba(255, 169, 57, 0.5);
+  background: rgba(28, 12, 7, 0.9);
+  box-shadow:
+    0 0 24px rgba(255, 106, 39, 0.15),
+    inset 0 0 20px rgba(255, 169, 57, 0.04);
+  transform: translateX(-50%);
+  animation: reactor-flicker 1.2s ease-in-out infinite;
+}
+
+.reactor-status[hidden] {
+  display: none;
+}
+
+.reactor-status span {
+  display: block;
+  margin-bottom: 2px;
+  color: #9f6946;
+  font-size: 0.45rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.reactor-status strong {
+  color: #ffd36c;
+  font-family: var(--font-display);
+  font-size: 0.74rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.reactor-status > b {
+  align-self: center;
+  color: #fff1b4;
+  font-family: var(--font-display);
+  font-size: 0.9rem;
+  letter-spacing: 0.05em;
+}
+
+.reactor-meter {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  background: rgba(67, 25, 13, 0.9);
+}
+
+.reactor-meter i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, #ff613a, #ffd95f);
+  box-shadow: 0 0 9px rgba(255, 177, 59, 0.65);
+}
+
+.performance-readout {
+  position: absolute;
+  z-index: 5;
+  right: 22px;
+  bottom: 82px;
+  pointer-events: none;
+  color: rgba(128, 158, 160, 0.62);
+  font-size: 0.46rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.performance-readout b {
+  color: rgba(180, 216, 216, 0.72);
+  font-weight: 500;
+}
+
 .hud-bottom {
   bottom: 0;
   display: flex;
@@ -362,6 +477,15 @@ button {
   border-left: 2px solid var(--cyan);
   background: rgba(4, 12, 14, 0.72);
   backdrop-filter: blur(7px);
+}
+
+.weapon-card.is-surging {
+  border-left-color: #ffc64c;
+  box-shadow: inset 12px 0 22px rgba(255, 161, 53, 0.06);
+}
+
+.weapon-card.upgrade-flash {
+  animation: weapon-upgrade-flash 900ms ease-out;
 }
 
 .eyebrow {
@@ -385,12 +509,17 @@ button {
   gap: 15px;
   margin-top: 7px;
   color: #6e898b;
-  font-size: 0.5rem;
+  font-size: 0.54rem;
 }
 
 .weapon-stats b {
   color: var(--cyan);
+  font-size: 0.62rem;
   font-weight: 500;
+}
+
+.weapon-card.is-surging .weapon-stats b {
+  color: #ffd467;
 }
 
 .controls-hint {
@@ -694,6 +823,28 @@ button {
   }
 }
 
+@keyframes reactor-flicker {
+  0%,
+  100% {
+    border-color: rgba(255, 169, 57, 0.45);
+  }
+  50% {
+    border-color: rgba(255, 210, 92, 0.72);
+  }
+}
+
+@keyframes weapon-upgrade-flash {
+  0% {
+    border-left-color: #dfffff;
+    background: rgba(63, 172, 178, 0.34);
+    box-shadow: 0 0 28px rgba(112, 237, 244, 0.32);
+  }
+  100% {
+    background: rgba(4, 12, 14, 0.72);
+    box-shadow: none;
+  }
+}
+
 @media (max-width: 760px) {
   .game-shell {
     min-height: 500px;
@@ -774,7 +925,7 @@ button {
   .hud-stat {
     min-width: 0;
     flex: 1;
-    padding: 7px 8px 6px;
+    padding: 7px 5px 6px;
   }
 
   .hud-stat strong {
@@ -789,11 +940,19 @@ button {
     flex: 1.25;
   }
 
+  .scrap-stat {
+    flex: 0.9;
+  }
+
   .onboarding-hint {
     top: 106px;
     width: min(310px, calc(100% - 32px));
     min-width: 0;
     padding: 9px 12px;
+  }
+
+  .reactor-status {
+    top: 106px;
   }
 
   .onboarding-hint strong {
@@ -806,6 +965,12 @@ button {
 
   .hud-bottom {
     padding: 18px 12px max(14px, env(safe-area-inset-bottom));
+  }
+
+  .performance-readout {
+    right: 12px;
+    bottom: 76px;
+    font-size: 0.44rem;
   }
 
   .weapon-card {
@@ -927,12 +1092,15 @@ button {
 
 @media (prefers-reduced-motion: reduce) {
   .status-dot,
-  .arena::before {
+  .arena::before,
+  .reactor-status {
     animation: none;
   }
 
   .upgrade-card,
-  .restart-button {
+  .restart-button,
+  .weapon-card {
     transition: none;
+    animation: none;
   }
 }
