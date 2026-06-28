@@ -62,13 +62,22 @@ app.innerHTML = `
 
       <div class="hud hud-bottom">
         <div class="weapon-card">
-          <span class="eyebrow">Weapon system</span>
-          <strong>ARC PULSE // AUTO</strong>
-          <div class="weapon-stats">
-            <span>DMG <b id="damage-stat">18</b></span>
-            <span>ROF <b id="rate-stat">1.9 SHOTS/S</b></span>
-            <span>MOVE <b id="speed-stat">230</b></span>
+          <span class="eyebrow">Weapon systems</span>
+          <div class="weapon-status-list">
+            <div class="weapon-status-row">
+              <strong>ARC PULSE</strong>
+              <span><b id="damage-stat">18</b> DMG · <b id="rate-stat">1.9</b>/S</span>
+            </div>
+            <div id="orbit-status" class="weapon-status-row" hidden>
+              <strong>ORBIT DRONES</strong>
+              <span><b id="orbit-count-stat">1</b> UNIT · <b id="orbit-damage-stat">14</b> DMG</span>
+            </div>
+            <div id="emp-status" class="weapon-status-row" hidden>
+              <strong>EMP BURST</strong>
+              <span><b id="emp-cooldown-stat">6.0</b>S CD · <b id="emp-radius-stat">120</b>R</span>
+            </div>
           </div>
+          <span class="weapon-mobility">THRUSTERS <b id="speed-stat">230</b></span>
           <span id="weapon-confirmation" class="weapon-confirmation" aria-live="polite"></span>
         </div>
         <div class="controls-hint">
@@ -122,6 +131,12 @@ const ui = {
   damage: document.querySelector('#damage-stat'),
   rate: document.querySelector('#rate-stat'),
   speed: document.querySelector('#speed-stat'),
+  orbitStatus: document.querySelector('#orbit-status'),
+  orbitCount: document.querySelector('#orbit-count-stat'),
+  orbitDamage: document.querySelector('#orbit-damage-stat'),
+  empStatus: document.querySelector('#emp-status'),
+  empCooldown: document.querySelector('#emp-cooldown-stat'),
+  empRadius: document.querySelector('#emp-radius-stat'),
   levelUp: document.querySelector('#level-up'),
   upgradeOptions: document.querySelector('#upgrade-options'),
   gameOver: document.querySelector('#game-over'),
@@ -201,6 +216,9 @@ const DESKTOP_CAPS = {
 }
 
 const MIN_FIRE_INTERVAL = 0.22
+const MAX_ORBIT_DRONES = 4
+const MIN_EMP_COOLDOWN = 2.8
+const MAX_EMP_RADIUS = 210
 const SURGE_FIRE_INTERVAL_MULTIPLIER = 0.7
 const SURGE_MIN_FIRE_INTERVAL = 0.18
 const SURGE_SPAWN_INTERVAL_MULTIPLIER = 0.94
@@ -254,6 +272,7 @@ function createInitialState() {
     hudClock: 0,
     introClock: 8,
     targetId: null,
+    levelUpChoices: [],
     scoutIntroduced: false,
     heavyIntroduced: false,
     level: 1,
@@ -290,6 +309,23 @@ function createInitialState() {
       muzzleGlow: 0,
       moveX: 0,
       moveY: 0,
+    },
+    orbit: {
+      unlocked: false,
+      count: 0,
+      damage: 14,
+      radius: 54,
+      droneRadius: 8,
+      angle: 0,
+      hitInterval: 0.38,
+      positions: [],
+    },
+    emp: {
+      unlocked: false,
+      damage: 26,
+      radius: 120,
+      cooldown: 6,
+      clock: 6,
     },
     enemies: [],
     bullets: [],
@@ -468,9 +504,14 @@ function updateHud() {
   ui.scrap.textContent = String(state.scrap).padStart(3, '0')
   ui.kills.textContent = String(state.kills).padStart(3, '0')
   ui.damage.textContent = Math.round(getCurrentDamage())
-  ui.rate.textContent =
-    `${(1 / getCurrentFireInterval()).toFixed(1)} SHOTS/S`
+  ui.rate.textContent = (1 / getCurrentFireInterval()).toFixed(1)
   ui.speed.textContent = Math.round(player.speed)
+  ui.orbitStatus.hidden = !state.orbit.unlocked
+  ui.orbitCount.textContent = state.orbit.count
+  ui.orbitDamage.textContent = Math.round(state.orbit.damage)
+  ui.empStatus.hidden = !state.emp.unlocked
+  ui.empCooldown.textContent = state.emp.cooldown.toFixed(1)
+  ui.empRadius.textContent = Math.round(state.emp.radius)
 
   const surging = isReactorSurging()
   ui.reactorStatus.hidden = !surging
@@ -576,6 +617,7 @@ function spawnEnemy(forcedType = null) {
     vy: 0,
     phase: Math.random() * TAU,
     flash: 0,
+    orbitCooldown: 0,
     dead: false,
   })
   return true
@@ -929,12 +971,13 @@ const upgrades = [
   {
     id: 'fireRate',
     icon: 'FR',
-    title: 'Fire rate',
+    title: 'Arc Pulse Fire Rate Up',
     description: 'Arc Pulse fires faster.',
     current: () => `${(1 / state.player.fireInterval).toFixed(1)} shots/s`,
     next: () =>
       `${(1 / Math.max(MIN_FIRE_INTERVAL, state.player.fireInterval * 0.76)).toFixed(1)} shots/s`,
-    confirmation: 'FIRE RATE UP',
+    available: () => state.player.fireInterval > MIN_FIRE_INTERVAL + 0.001,
+    confirmation: 'ARC RATE UP',
     apply: () => {
       state.player.fireInterval = Math.max(
         MIN_FIRE_INTERVAL,
@@ -945,11 +988,11 @@ const upgrades = [
   {
     id: 'damage',
     icon: 'DM',
-    title: 'Damage',
+    title: 'Arc Pulse Damage Up',
     description: 'Arc Pulse hits harder.',
     current: () => `${Math.round(state.player.damage)} damage`,
     next: () => `${Math.round(state.player.damage + 7)} damage`,
-    confirmation: 'DAMAGE UP',
+    confirmation: 'ARC DAMAGE UP',
     apply: () => {
       state.player.damage += 7
     },
@@ -957,7 +1000,7 @@ const upgrades = [
   {
     id: 'speed',
     icon: 'MV',
-    title: 'Thrusters',
+    title: 'Thrusters Up',
     description: 'Drone moves faster.',
     current: () => `${Math.round(state.player.speed)} speed`,
     next: () => `${Math.round(state.player.speed + 28)} speed`,
@@ -966,11 +1009,159 @@ const upgrades = [
       state.player.speed += 28
     },
   },
+  {
+    id: 'unlockOrbit',
+    icon: 'OD',
+    title: 'Unlock Orbit Drone',
+    description: 'Deploy a cyan micro-drone that damages enemies on contact.',
+    current: () => 'Offline',
+    next: () => '1 drone',
+    isUnlock: true,
+    available: () => !state.orbit.unlocked,
+    confirmation: 'ORBIT DRONE ONLINE',
+    apply: () => {
+      state.orbit.unlocked = true
+      state.orbit.count = 1
+      syncOrbitPositions()
+      addRing({
+        x: state.player.x,
+        y: state.player.y,
+        radius: state.player.radius + 4,
+        maxRadius: state.orbit.radius + 14,
+        life: 0.5,
+        maxLife: 0.5,
+        color: '#69f5ff',
+      }, true)
+    },
+  },
+  {
+    id: 'addOrbit',
+    icon: '+D',
+    title: 'Add Orbit Drone',
+    description: 'Add another micro-drone to the defensive orbit.',
+    current: () =>
+      `${state.orbit.count} ${state.orbit.count === 1 ? 'drone' : 'drones'}`,
+    next: () => `${state.orbit.count + 1} drones`,
+    available: () =>
+      state.orbit.unlocked && state.orbit.count < MAX_ORBIT_DRONES,
+    confirmation: 'ORBIT DRONE ADDED',
+    apply: () => {
+      state.orbit.count = Math.min(MAX_ORBIT_DRONES, state.orbit.count + 1)
+      syncOrbitPositions()
+    },
+  },
+  {
+    id: 'orbitDamage',
+    icon: 'OD',
+    title: 'Orbit Drone Damage Up',
+    description: 'Micro-drone contact hits harder.',
+    current: () => `${Math.round(state.orbit.damage)} damage`,
+    next: () => `${Math.round(state.orbit.damage + 6)} damage`,
+    available: () => state.orbit.unlocked,
+    confirmation: 'ORBIT DAMAGE UP',
+    apply: () => {
+      state.orbit.damage += 6
+    },
+  },
+  {
+    id: 'unlockEmp',
+    icon: 'EM',
+    title: 'Unlock EMP Burst',
+    description: 'Emit an automatic radial shockwave every few seconds.',
+    current: () => 'Offline',
+    next: () => `${state.emp.cooldown.toFixed(1)}s pulse`,
+    isUnlock: true,
+    available: () => !state.emp.unlocked,
+    confirmation: 'EMP BURST ONLINE',
+    apply: () => {
+      state.emp.unlocked = true
+      state.emp.clock = 0
+    },
+  },
+  {
+    id: 'empCooldown',
+    icon: 'CD',
+    title: 'EMP Cooldown Down',
+    description: 'EMP Burst recharges faster.',
+    current: () => `${state.emp.cooldown.toFixed(1)}s cooldown`,
+    next: () =>
+      `${Math.max(MIN_EMP_COOLDOWN, state.emp.cooldown * 0.82).toFixed(1)}s cooldown`,
+    available: () =>
+      state.emp.unlocked && state.emp.cooldown > MIN_EMP_COOLDOWN + 0.01,
+    confirmation: 'EMP COOLDOWN DOWN',
+    apply: () => {
+      state.emp.cooldown = Math.max(
+        MIN_EMP_COOLDOWN,
+        state.emp.cooldown * 0.82,
+      )
+      state.emp.clock = Math.min(state.emp.clock, state.emp.cooldown)
+    },
+  },
+  {
+    id: 'empRadius',
+    icon: 'ER',
+    title: 'EMP Radius Up',
+    description: 'Expand the EMP shockwave coverage.',
+    current: () => `${Math.round(state.emp.radius)} radius`,
+    next: () => `${Math.min(MAX_EMP_RADIUS, state.emp.radius + 24)} radius`,
+    available: () =>
+      state.emp.unlocked && state.emp.radius < MAX_EMP_RADIUS,
+    confirmation: 'EMP RADIUS UP',
+    apply: () => {
+      state.emp.radius = Math.min(MAX_EMP_RADIUS, state.emp.radius + 24)
+    },
+  },
+  {
+    id: 'empDamage',
+    icon: 'ED',
+    title: 'EMP Damage Up',
+    description: 'Increase EMP Burst shock damage.',
+    current: () => `${Math.round(state.emp.damage)} damage`,
+    next: () => `${Math.round(state.emp.damage + 10)} damage`,
+    available: () => state.emp.unlocked,
+    confirmation: 'EMP DAMAGE UP',
+    apply: () => {
+      state.emp.damage += 10
+    },
+  },
 ]
+
+function shuffle(items) {
+  for (let index = items.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1))
+    const current = items[index]
+    items[index] = items[swapIndex]
+    items[swapIndex] = current
+  }
+  return items
+}
+
+function getLevelUpChoices() {
+  const available = upgrades.filter(
+    (upgrade) => !upgrade.available || upgrade.available(),
+  )
+  const unlocks = available.filter((upgrade) => upgrade.isUnlock)
+  const choices = []
+
+  // Keep weapon expansion discoverable without allowing both unlocks to crowd
+  // out the general-purpose Arc Pulse and movement upgrades.
+  if (unlocks.length > 0) {
+    choices.push(unlocks[Math.floor(Math.random() * unlocks.length)])
+  }
+
+  const remaining = shuffle(
+    available.filter(
+      (upgrade) => !choices.includes(upgrade) && !upgrade.isUnlock,
+    ),
+  )
+  choices.push(...remaining.slice(0, 3 - choices.length))
+  return choices
+}
 
 function openLevelUp() {
   state.mode = 'levelup'
-  ui.upgradeOptions.innerHTML = upgrades
+  state.levelUpChoices = getLevelUpChoices()
+  ui.upgradeOptions.innerHTML = state.levelUpChoices
     .map(
       (upgrade, index) => `
         <button class="upgrade-card" type="button" data-upgrade="${upgrade.id}">
@@ -991,7 +1182,7 @@ function openLevelUp() {
 
 function chooseUpgrade(id) {
   if (state.mode !== 'levelup') return
-  const upgrade = upgrades.find((item) => item.id === id)
+  const upgrade = state.levelUpChoices.find((item) => item.id === id)
   if (!upgrade) return
   upgrade.apply()
   createFloatingText(
@@ -1112,6 +1303,115 @@ function updateShooting(dt) {
   } else {
     state.fireClock = 0
   }
+}
+
+function syncOrbitPositions() {
+  const orbit = state.orbit
+  if (!orbit.unlocked) {
+    orbit.positions.length = 0
+    return
+  }
+
+  while (orbit.positions.length < orbit.count) {
+    orbit.positions.push({ x: state.player.x, y: state.player.y, angle: 0 })
+  }
+  orbit.positions.length = orbit.count
+
+  for (let index = 0; index < orbit.count; index += 1) {
+    const angle = orbit.angle + (index / orbit.count) * TAU
+    const position = orbit.positions[index]
+    position.x = state.player.x + Math.cos(angle) * orbit.radius
+    position.y = state.player.y + Math.sin(angle) * orbit.radius
+    position.angle = angle + Math.PI / 2
+  }
+}
+
+function updateOrbitDrones(dt) {
+  const orbit = state.orbit
+  if (!orbit.unlocked) return
+
+  orbit.angle = (orbit.angle + dt * 2.15) % TAU
+  syncOrbitPositions()
+
+  // At the entity caps this is at most four drones against 96 enemies. A
+  // player-centered annulus rejects most enemies before any drone checks.
+  for (const enemy of state.enemies) {
+    if (enemy.dead) continue
+    enemy.orbitCooldown = Math.max(0, enemy.orbitCooldown - dt)
+    if (enemy.orbitCooldown > 0) continue
+
+    const playerDx = enemy.x - state.player.x
+    const playerDy = enemy.y - state.player.y
+    const outerDistance = orbit.radius + orbit.droneRadius + enemy.radius
+    const innerDistance = Math.max(
+      0,
+      orbit.radius - orbit.droneRadius - enemy.radius,
+    )
+    const playerDistanceSquared =
+      playerDx * playerDx + playerDy * playerDy
+    if (
+      playerDistanceSquared > outerDistance * outerDistance ||
+      playerDistanceSquared < innerDistance * innerDistance
+    ) {
+      continue
+    }
+
+    for (const drone of orbit.positions) {
+      const dx = drone.x - enemy.x
+      const dy = drone.y - enemy.y
+      const collisionDistance = orbit.droneRadius + enemy.radius
+      if (dx * dx + dy * dy > collisionDistance * collisionDistance) continue
+
+      enemy.health -= orbit.damage
+      enemy.flash = 0.12
+      enemy.orbitCooldown = orbit.hitInterval
+      createHitEffect(drone.x, drone.y, '#79f7ff', 3)
+      if (enemy.health <= 0) destroyEnemy(enemy)
+      break
+    }
+  }
+}
+
+function triggerEmpBurst() {
+  const emp = state.emp
+  const player = state.player
+  emp.clock = emp.cooldown
+
+  addRing({
+    kind: 'emp',
+    x: player.x,
+    y: player.y,
+    radius: player.radius + 9,
+    maxRadius: emp.radius,
+    life: 0.62,
+    maxLife: 0.62,
+    color: '#71f3ff',
+    bright: isReactorSurging(),
+  }, true)
+
+  const radiusSquared = emp.radius * emp.radius
+  for (const enemy of state.enemies) {
+    if (enemy.dead) continue
+    const dx = enemy.x - player.x
+    const dy = enemy.y - player.y
+    const distanceSquared = dx * dx + dy * dy
+    if (distanceSquared > radiusSquared) continue
+
+    const distance = Math.sqrt(distanceSquared) || 1
+    const force = 10 + (1 - Math.min(1, distance / emp.radius)) * 18
+    enemy.x += (dx / distance) * force
+    enemy.y += (dy / distance) * force
+    enemy.health -= emp.damage
+    enemy.flash = 0.18
+    if (enemy.health <= 0) destroyEnemy(enemy)
+  }
+  state.shake = Math.min(13, state.shake + 1.5)
+}
+
+function updateEmp(dt) {
+  if (!state.emp.unlocked) return
+  state.emp.clock -= dt
+  if (state.emp.clock <= 0) triggerEmpBurst()
 }
 
 function updateEnemies(dt) {
@@ -1351,6 +1651,8 @@ function update(dt, wallDt = dt) {
   updateShooting(dt)
   updateEnemies(dt)
   if (state.mode !== 'running') return
+  updateOrbitDrones(dt)
+  updateEmp(dt)
   updateBullets(dt)
   updatePickups(dt)
   updateEffects(wallDt)
@@ -1719,6 +2021,49 @@ function drawBullets() {
   }
 }
 
+function drawOrbitDrones() {
+  const orbit = state.orbit
+  if (!orbit.unlocked) return
+
+  const surged = isReactorSurging()
+  ctx.save()
+  if (!reducedEffects) {
+    ctx.globalAlpha = surged ? 0.24 : 0.14
+    ctx.strokeStyle = surged ? '#b5fbff' : '#61dfe8'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.arc(state.player.x, state.player.y, orbit.radius, 0, TAU)
+    ctx.stroke()
+  }
+
+  ctx.globalAlpha = 1
+  for (const drone of orbit.positions) {
+    ctx.save()
+    ctx.translate(drone.x, drone.y)
+    ctx.rotate(drone.angle)
+    ctx.shadowColor = '#6af2ff'
+    ctx.shadowBlur = reducedEffects ? 0 : surged ? 15 : 9
+    ctx.fillStyle = surged ? '#d9ffff' : '#8af8ff'
+    ctx.fillRect(-6, -4, 12, 8)
+    ctx.shadowBlur = 0
+    ctx.fillStyle = '#173b45'
+    ctx.fillRect(-3, -2, 6, 4)
+    ctx.strokeStyle = surged ? '#d7ffff' : '#63dce8'
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.moveTo(-6, 0)
+    ctx.lineTo(-11, 0)
+    ctx.moveTo(6, 0)
+    ctx.lineTo(11, 0)
+    ctx.stroke()
+    ctx.fillStyle = '#44bfd2'
+    ctx.fillRect(-12, -3, 4, 6)
+    ctx.fillRect(8, -3, 4, 6)
+    ctx.restore()
+  }
+  ctx.restore()
+}
+
 function drawPlayer() {
   const player = state.player
   const surged = isReactorSurging()
@@ -1846,10 +2191,15 @@ function drawEffects() {
   for (const ring of state.rings) {
     ctx.globalAlpha = Math.max(0, ring.life / ring.maxLife)
     ctx.strokeStyle = ring.color
-    ctx.lineWidth = 2
+    ctx.lineWidth = ring.kind === 'emp' ? 3 : 2
+    if (ring.kind === 'emp') {
+      ctx.shadowColor = ring.color
+      ctx.shadowBlur = reducedEffects ? 0 : ring.bright ? 16 : 9
+    }
     ctx.beginPath()
     ctx.arc(ring.x, ring.y, ring.currentRadius || ring.radius, 0, TAU)
     ctx.stroke()
+    ctx.shadowBlur = 0
   }
   ctx.globalAlpha = 1
 
@@ -1939,6 +2289,7 @@ function render() {
   state.pickups.forEach(drawPickup)
   state.enemies.forEach(drawEnemy)
   drawBullets()
+  drawOrbitDrones()
   drawPlayer()
   drawSurgePulse()
   drawEffects()
@@ -1994,7 +2345,8 @@ window.addEventListener('keydown', (event) => {
   }
   if (event.code === 'Enter' && state.mode === 'gameover') resetGame()
   if (state.mode === 'levelup' && ['Digit1', 'Digit2', 'Digit3'].includes(event.code)) {
-    chooseUpgrade(upgrades[Number(event.code.at(-1)) - 1].id)
+    const choice = state.levelUpChoices[Number(event.code.at(-1)) - 1]
+    if (choice) chooseUpgrade(choice.id)
   }
 })
 

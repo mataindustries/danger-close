@@ -473,7 +473,7 @@ button {
 
 .weapon-card {
   position: relative;
-  min-width: 222px;
+  width: 330px;
   padding: 11px 13px;
   border-left: 2px solid var(--cyan);
   background: rgba(4, 12, 14, 0.72);
@@ -498,28 +498,57 @@ button {
   text-transform: uppercase;
 }
 
-.weapon-card > strong {
+.weapon-status-list {
+  margin-top: 2px;
+}
+
+.weapon-status-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-top: 1px solid rgba(105, 191, 194, 0.09);
+  color: #6e898b;
+  font-size: 0.5rem;
+}
+
+.weapon-status-row:first-child {
+  border-top: 0;
+}
+
+.weapon-status-row[hidden] {
+  display: none;
+}
+
+.weapon-status-row strong {
   color: #cef9f9;
   font-family: var(--font-display);
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
+  font-size: 0.63rem;
+  letter-spacing: 0.07em;
 }
 
-.weapon-stats {
-  display: flex;
-  gap: 15px;
-  margin-top: 7px;
-  color: #6e898b;
-  font-size: 0.54rem;
+.weapon-status-row > span {
+  white-space: nowrap;
 }
 
-.weapon-stats b {
+.weapon-status-row b,
+.weapon-mobility b {
   color: var(--cyan);
-  font-size: 0.62rem;
+  font-size: 0.57rem;
   font-weight: 500;
 }
 
-.weapon-card.is-surging .weapon-stats b {
+.weapon-mobility {
+  display: block;
+  margin-top: 3px;
+  color: #526d70;
+  font-size: 0.45rem;
+  letter-spacing: 0.09em;
+}
+
+.weapon-card.is-surging .weapon-status-row b,
+.weapon-card.is-surging .weapon-mobility b {
   color: #ffd467;
 }
 
@@ -1006,17 +1035,18 @@ button {
 
   .performance-readout {
     right: 12px;
-    bottom: 76px;
+    bottom: 118px;
     font-size: 0.44rem;
   }
 
   .weapon-card {
-    min-width: 193px;
+    width: min(300px, calc(100vw - 24px));
     padding: 8px 10px;
   }
 
-  .weapon-stats {
-    gap: 9px;
+  .weapon-status-row {
+    gap: 8px;
+    padding-block: 3px;
   }
 
   .desktop-control {
@@ -1123,7 +1153,7 @@ button {
   }
 
   .weapon-card {
-    min-width: 190px;
+    width: calc(100vw - 24px);
   }
 }
 
