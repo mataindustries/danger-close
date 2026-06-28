@@ -35,6 +35,7 @@ body {
   overflow: hidden;
   touch-action: none;
   user-select: none;
+  -webkit-touch-callout: none;
   background:
     radial-gradient(circle at 50% 0%, rgba(41, 79, 78, 0.25), transparent 48%),
     #06090a;
@@ -453,6 +454,7 @@ button {
   color: rgba(128, 158, 160, 0.62);
   font-size: 0.46rem;
   letter-spacing: 0.06em;
+  white-space: nowrap;
   text-transform: uppercase;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
 }
@@ -460,6 +462,18 @@ button {
 .performance-readout b {
   color: rgba(180, 216, 216, 0.72);
   font-weight: 500;
+}
+
+.performance-readout .spike-indicator {
+  margin-left: 5px;
+  padding: 1px 3px;
+  color: rgba(255, 139, 100, 0.9);
+  border: 1px solid rgba(255, 101, 70, 0.38);
+  background: rgba(49, 10, 7, 0.52);
+}
+
+.performance-readout .spike-indicator[hidden] {
+  display: none;
 }
 
 .hud-bottom {
@@ -1036,7 +1050,8 @@ button {
   .performance-readout {
     right: 12px;
     bottom: 118px;
-    font-size: 0.44rem;
+    font-size: 0.4rem;
+    letter-spacing: 0.035em;
   }
 
   .weapon-card {

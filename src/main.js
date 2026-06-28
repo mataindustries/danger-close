@@ -57,7 +57,8 @@ app.innerHTML = `
       </div>
 
       <div id="performance-readout" class="performance-readout">
-        FPS <b>--</b> · EN <b>0</b> · BLT <b>0</b> · PCK <b>0</b> · PRT <b>0</b>
+        <span id="performance-values">FPS -- · EN 0 · BLT 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · FT --MS</span>
+        <b id="spike-indicator" class="spike-indicator" hidden>SPIKE</b>
       </div>
 
       <div class="hud hud-bottom">
@@ -148,7 +149,8 @@ const ui = {
   reactorStatus: document.querySelector('#reactor-status'),
   reactorTime: document.querySelector('#reactor-time'),
   reactorMeter: document.querySelector('#reactor-meter'),
-  performanceReadout: document.querySelector('#performance-readout'),
+  performanceValues: document.querySelector('#performance-values'),
+  spikeIndicator: document.querySelector('#spike-indicator'),
   weaponCard: document.querySelector('.weapon-card'),
   weaponConfirmation: document.querySelector('#weapon-confirmation'),
 }
@@ -173,6 +175,8 @@ let state
 let backgroundMarks = []
 let ambientDust = []
 let ambientGlows = []
+const backgroundLayer = document.createElement('canvas')
+const vignetteLayer = document.createElement('canvas')
 let reducedEffects = false
 
 const MOBILE_CAPS = {
@@ -219,6 +223,9 @@ const MIN_FIRE_INTERVAL = 0.22
 const MAX_ORBIT_DRONES = 4
 const MIN_EMP_COOLDOWN = 2.8
 const MAX_EMP_RADIUS = 210
+const MAX_SIMULATION_DT = 1 / 30
+const SPIKE_THRESHOLD_MS = 80
+const SPIKE_INDICATOR_DURATION = 1.25
 const SURGE_FIRE_INTERVAL_MULTIPLIER = 0.7
 const SURGE_MIN_FIRE_INTERVAL = 0.18
 const SURGE_SPAWN_INTERVAL_MULTIPLIER = 0.94
@@ -288,6 +295,10 @@ function createInitialState() {
     fps: 60,
     fpsFrames: 0,
     fpsTime: 0,
+    frameMs: 16.7,
+    diagnosticsClock: 0,
+    spikeTimer: 0,
+    spawnBacklog: 0,
     kills: 0,
     nextEntityId: 1,
     player: {
@@ -341,8 +352,9 @@ function resetGame() {
   ui.levelUp.hidden = true
   ui.gameOver.hidden = true
   ui.onboardingHint.classList.remove('is-hidden')
-  ui.performanceReadout.textContent =
-    'FPS -- · EN 0 · BLT 0 · PCK 0 · PRT 0'
+  ui.performanceValues.textContent =
+    'FPS -- · EN 0 · BLT 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · FT --MS'
+  ui.spikeIndicator.hidden = true
   ui.weaponConfirmation.textContent = ''
   ui.weaponConfirmation.classList.remove('is-visible')
   pointer.active = false
@@ -427,6 +439,131 @@ function createBackgroundMarks() {
       opacity: 0.018 + random() * 0.025,
     })
   }
+
+  rebuildBackgroundLayers()
+}
+
+function rebuildBackgroundLayers() {
+  // Static scenery does not need the full gameplay DPR. This keeps the cached
+  // layers sharp enough while avoiding a large mobile GPU-memory allocation.
+  const layerDpr = Math.min(dpr, 1.25)
+  backgroundLayer.width = Math.round(width * layerDpr)
+  backgroundLayer.height = Math.round(height * layerDpr)
+  vignetteLayer.width = backgroundLayer.width
+  vignetteLayer.height = backgroundLayer.height
+
+  const backgroundContext = backgroundLayer.getContext('2d')
+  backgroundContext.setTransform(layerDpr, 0, 0, layerDpr, 0, 0)
+  const gradient = backgroundContext.createRadialGradient(
+    width * 0.5,
+    height * 0.42,
+    0,
+    width * 0.5,
+    height * 0.5,
+    Math.max(width, height) * 0.78,
+  )
+  gradient.addColorStop(0, '#162124')
+  gradient.addColorStop(0.52, '#101719')
+  gradient.addColorStop(1, '#080d0f')
+  backgroundContext.fillStyle = gradient
+  backgroundContext.fillRect(0, 0, width, height)
+
+  const gridSize = 56
+  backgroundContext.lineWidth = 1
+  for (let x = 0; x <= width; x += gridSize) {
+    backgroundContext.strokeStyle =
+      x % (gridSize * 4) === 0
+        ? 'rgba(82, 130, 127, 0.13)'
+        : 'rgba(73, 99, 98, 0.075)'
+    backgroundContext.beginPath()
+    backgroundContext.moveTo(x, 0)
+    backgroundContext.lineTo(x, height)
+    backgroundContext.stroke()
+  }
+  for (let y = 0; y <= height; y += gridSize) {
+    backgroundContext.strokeStyle =
+      y % (gridSize * 4) === 0
+        ? 'rgba(82, 130, 127, 0.13)'
+        : 'rgba(73, 99, 98, 0.075)'
+    backgroundContext.beginPath()
+    backgroundContext.moveTo(0, y)
+    backgroundContext.lineTo(width, y)
+    backgroundContext.stroke()
+  }
+
+  for (const mark of backgroundMarks) {
+    if (mark.patchRadius) {
+      const point = mark.points[0]
+      backgroundContext.fillStyle = `rgba(3, 7, 8, ${mark.opacity * 0.32})`
+      backgroundContext.beginPath()
+      backgroundContext.ellipse(
+        point.x,
+        point.y,
+        mark.patchRadius,
+        mark.patchRadius * 0.48,
+        mark.opacity * 8,
+        0,
+        TAU,
+      )
+      backgroundContext.fill()
+    }
+    backgroundContext.strokeStyle = `rgba(175, 154, 118, ${mark.opacity})`
+    backgroundContext.lineWidth = 1
+    backgroundContext.beginPath()
+    for (let index = 0; index < mark.points.length; index += 1) {
+      const point = mark.points[index]
+      if (index === 0) backgroundContext.moveTo(point.x, point.y)
+      else backgroundContext.lineTo(point.x, point.y)
+    }
+    backgroundContext.stroke()
+    if (mark.debris) {
+      const point = mark.points[0]
+      backgroundContext.fillStyle =
+        `rgba(124, 113, 90, ${mark.opacity + 0.05})`
+      backgroundContext.fillRect(point.x - 2, point.y - 1, 5, 2)
+    }
+  }
+
+  const vignetteContext = vignetteLayer.getContext('2d')
+  vignetteContext.setTransform(layerDpr, 0, 0, layerDpr, 0, 0)
+  const vignette = vignetteContext.createRadialGradient(
+    width / 2,
+    height / 2,
+    Math.min(width, height) * 0.25,
+    width / 2,
+    height / 2,
+    Math.max(width, height) * 0.72,
+  )
+  vignette.addColorStop(0, 'rgba(0, 0, 0, 0)')
+  vignette.addColorStop(1, 'rgba(0, 0, 0, 0.44)')
+  vignetteContext.fillStyle = vignette
+  vignetteContext.fillRect(0, 0, width, height)
+
+  for (const glow of ambientGlows) {
+    const diameter = Math.ceil(glow.radius * 2)
+    const sprite = document.createElement('canvas')
+    sprite.width = Math.ceil(diameter * layerDpr)
+    sprite.height = Math.ceil(diameter * layerDpr)
+    const spriteContext = sprite.getContext('2d')
+    spriteContext.setTransform(layerDpr, 0, 0, layerDpr, 0, 0)
+    const glowGradient = spriteContext.createRadialGradient(
+      diameter / 2,
+      diameter / 2,
+      0,
+      diameter / 2,
+      diameter / 2,
+      diameter / 2,
+    )
+    glowGradient.addColorStop(
+      0,
+      `rgba(97, 176, 165, ${glow.opacity})`,
+    )
+    glowGradient.addColorStop(1, 'rgba(50, 100, 95, 0)')
+    spriteContext.fillStyle = glowGradient
+    spriteContext.fillRect(0, 0, diameter, diameter)
+    glow.sprite = sprite
+    glow.diameter = diameter
+  }
 }
 
 function formatTime(seconds) {
@@ -459,15 +596,24 @@ function getEntityCap(type) {
   return Math.min(entityCaps[type], entityCaps.surge[type])
 }
 
+function getVisualEffectCap(type) {
+  const cap = getEntityCap(type)
+  if (!reducedEffects) return cap
+  return Math.floor(cap * (type === 'floatingTexts' ? 0.75 : 0.72))
+}
+
 function updateEffectBudget() {
+  const performanceLoad =
+    state.fps < 50 || state.frameMs > 22 || state.spikeTimer > 0
   const surgeLoad =
     isReactorSurging() &&
-    (state.fps < 48 ||
+    (performanceLoad ||
       state.enemies.length >= getEntityCap('enemies') * 0.66 ||
       state.particles.length >= getEntityCap('particles') * 0.55 ||
       state.bullets.length >= getEntityCap('bullets') * 0.65)
 
   reducedEffects =
+    performanceLoad ||
     surgeLoad ||
     state.enemies.length >= entityCaps.reducedEffectsEnemies ||
     state.particles.length >= entityCaps.particles * 0.72 ||
@@ -476,17 +622,45 @@ function updateEffectBudget() {
 }
 
 function updatePerformanceReadout(rawDt) {
-  state.fpsFrames += 1
-  state.fpsTime += rawDt
-  if (state.fpsTime < 0.5) return
+  const frameMs = rawDt * 1000
+  if (
+    frameMs >= SPIKE_THRESHOLD_MS &&
+    document.visibilityState === 'visible'
+  ) {
+    state.spikeTimer = SPIKE_INDICATOR_DURATION
+  } else {
+    state.spikeTimer = Math.max(
+      0,
+      state.spikeTimer - Math.min(rawDt, 0.1),
+    )
+  }
+  const hideSpikeIndicator = state.spikeTimer <= 0
+  if (ui.spikeIndicator.hidden !== hideSpikeIndicator) {
+    ui.spikeIndicator.hidden = hideSpikeIndicator
+  }
 
-  state.fps = Math.round(state.fpsFrames / state.fpsTime)
-  state.fpsFrames = 0
-  state.fpsTime = 0
-  ui.performanceReadout.textContent =
-    `FPS ${state.fps} · EN ${state.enemies.length} · ` +
-    `BLT ${state.bullets.length} · PCK ${state.pickups.length} · ` +
-    `PRT ${state.particles.length}`
+  const boundedFrameMs = Math.min(frameMs, 250)
+  const smoothing = boundedFrameMs > state.frameMs ? 0.18 : 0.06
+  state.frameMs += (boundedFrameMs - state.frameMs) * smoothing
+  state.fpsFrames += 1
+  state.fpsTime += Math.min(rawDt, 0.25)
+  state.diagnosticsClock += Math.min(rawDt, 0.25)
+
+  if (state.fpsTime >= 0.4) {
+    const measuredFps = state.fpsFrames / state.fpsTime
+    state.fps += (measuredFps - state.fps) * 0.32
+    state.fpsFrames = 0
+    state.fpsTime = 0
+  }
+
+  if (state.diagnosticsClock >= 0.25) {
+    state.diagnosticsClock = 0
+    ui.performanceValues.textContent =
+      `FPS ${Math.round(state.fps)} · EN ${state.enemies.length} · ` +
+      `BLT ${state.bullets.length} · PCK ${state.pickups.length} · ` +
+      `PRT ${state.particles.length} · TXT ${state.floatingTexts.length} · ` +
+      `FX ${state.rings.length} · FT ${state.frameMs.toFixed(1)}MS`
+  }
 }
 
 function updateHud() {
@@ -566,22 +740,38 @@ function spawnEnemy(forcedType = null) {
   if (state.enemies.length >= getEntityCap('enemies')) return false
 
   const margin = 34
-  const side = Math.floor(Math.random() * 4)
-  let x
-  let y
+  let x = 0
+  let y = 0
 
-  if (side === 0) {
-    x = Math.random() * width
-    y = -margin
-  } else if (side === 1) {
-    x = width + margin
-    y = Math.random() * height
-  } else if (side === 2) {
-    x = Math.random() * width
-    y = height + margin
-  } else {
-    x = -margin
-    y = Math.random() * height
+  // Retry a few edge positions to avoid stacked spawns feeding an expensive
+  // separation blob on the following frames.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const side = Math.floor(Math.random() * 4)
+    if (side === 0) {
+      x = Math.random() * width
+      y = -margin
+    } else if (side === 1) {
+      x = width + margin
+      y = Math.random() * height
+    } else if (side === 2) {
+      x = Math.random() * width
+      y = height + margin
+    } else {
+      x = -margin
+      y = Math.random() * height
+    }
+
+    let blocked = false
+    for (const enemy of state.enemies) {
+      if (enemy.dead) continue
+      const dx = enemy.x - x
+      const dy = enemy.y - y
+      if (dx * dx + dy * dy < 58 * 58) {
+        blocked = true
+        break
+      }
+    }
+    if (!blocked) break
   }
 
   let typeName = forcedType || randomEnemyType()
@@ -696,7 +886,7 @@ function fireAtNearestEnemy(target = findNearestEnemy()) {
 }
 
 function addRing(ring, important = false) {
-  const ringCap = getEntityCap('rings')
+  const ringCap = getVisualEffectCap('rings')
   if (
     !important &&
     reducedEffects &&
@@ -716,7 +906,8 @@ function createMuzzleEffect(x, y, dx, dy, surged = false) {
   const color = '#65f6ff'
   addRing({ x, y, radius: 2, maxRadius: 13, life: 0.14, maxLife: 0.14, color })
   const particleCount = reducedEffects ? 1 : 3
-  const availableParticles = getEntityCap('particles') - state.particles.length
+  const availableParticles =
+    getVisualEffectCap('particles') - state.particles.length
   for (let i = 0; i < Math.min(particleCount, availableParticles); i += 1) {
     const spread = (Math.random() - 0.5) * 1.2
     state.particles.push({
@@ -736,7 +927,8 @@ function createHitEffect(x, y, color = '#ffb064', count = 5) {
   const surgeScale = isReactorSurging() ? 0.48 : 1
   const budgetScale = reducedEffects ? 0.42 : 1
   const effectCount = Math.ceil(count * surgeScale * budgetScale)
-  const availableParticles = getEntityCap('particles') - state.particles.length
+  const availableParticles =
+    getVisualEffectCap('particles') - state.particles.length
   for (let i = 0; i < Math.min(effectCount, availableParticles); i += 1) {
     const angle = Math.random() * TAU
     const speed = 35 + Math.random() * 135
@@ -763,7 +955,7 @@ function createFloatingText(
   important = false,
 ) {
   if ((reducedEffects || isReactorSurging()) && !important) return
-  const floatingTextCap = getEntityCap('floatingTexts')
+  const floatingTextCap = getVisualEffectCap('floatingTexts')
   if (state.floatingTexts.length >= floatingTextCap) {
     if (!important) return
     state.floatingTexts.shift()
@@ -780,20 +972,27 @@ function createFloatingText(
   })
 }
 
-function destroyEnemy(enemy) {
+function destroyEnemy(enemy, suppressEffects = false) {
   if (enemy.dead) return
   enemy.dead = true
   state.kills += enemy.score
-  createHitEffect(enemy.x, enemy.y, enemy.color, enemy.type === 'heavy' ? 20 : 12)
-  addRing({
-    x: enemy.x,
-    y: enemy.y,
-    radius: enemy.radius * 0.5,
-    maxRadius: enemy.radius * 2.2,
-    life: 0.28,
-    maxLife: 0.28,
-    color: enemy.color,
-  })
+  if (!suppressEffects) {
+    createHitEffect(
+      enemy.x,
+      enemy.y,
+      enemy.color,
+      enemy.type === 'heavy' ? 20 : 12,
+    )
+    addRing({
+      x: enemy.x,
+      y: enemy.y,
+      radius: enemy.radius * 0.5,
+      maxRadius: enemy.radius * 2.2,
+      life: 0.28,
+      maxLife: 0.28,
+      color: enemy.color,
+    })
+  }
 
   const resourceType = rollResourceDrop(enemy.type)
   if (resourceType) spawnResourcePickup(resourceType, enemy)
@@ -1255,6 +1454,8 @@ function updateSpawning(dt) {
   state.spawnClock -= dt
   if (state.spawnClock > 0) return
 
+  const queuedSpawn = state.spawnBacklog > 0
+  if (queuedSpawn) state.spawnBacklog -= 1
   const surging = isReactorSurging()
   const surgePressure = surging ? SURGE_SPAWN_INTERVAL_MULTIPLIER : 1
   const baseSpawnInterval = Math.max(
@@ -1267,25 +1468,39 @@ function updateSpawning(dt) {
     Math.min(0.12, (state.elapsed - 55) * 0.00085),
   )
   const waveChance = surging ? Math.min(0.06, baseWaveChance) : baseWaveChance
-  const waveSize = Math.random() < waveChance ? 2 : 1
+  if (!queuedSpawn && Math.random() < waveChance) {
+    state.spawnBacklog = 1
+  }
   const maxEnemies = Math.min(
     getEntityCap('enemies'),
     26 + Math.floor(state.elapsed * 0.28),
   )
   let forcedType = null
+  let introduction = null
 
   if (state.elapsed >= 4 && !state.scoutIntroduced) {
     forcedType = 'scout'
-    state.scoutIntroduced = true
+    introduction = 'scout'
   } else if (state.elapsed >= 14 && !state.heavyIntroduced) {
     forcedType = 'heavy'
-    state.heavyIntroduced = true
+    introduction = 'heavy'
   }
 
-  for (let i = 0; i < waveSize && state.enemies.length < maxEnemies; i += 1) {
-    spawnEnemy(i === 0 ? forcedType : null)
+  const spawned =
+    state.enemies.length < maxEnemies && spawnEnemy(forcedType)
+  if (spawned && introduction === 'scout') {
+    state.scoutIntroduced = true
+  } else if (spawned && introduction === 'heavy') {
+    state.heavyIntroduced = true
+  } else if (!spawned) {
+    state.spawnBacklog = 0
   }
-  state.spawnClock = spawnInterval * (0.86 + Math.random() * 0.28)
+
+  // A two-enemy wave is intentionally split across frames.
+  state.spawnClock =
+    state.spawnBacklog > 0
+      ? Math.min(0.14, spawnInterval * 0.45)
+      : spawnInterval * (0.86 + Math.random() * 0.28)
 }
 
 function updateShooting(dt) {
@@ -1332,6 +1547,8 @@ function updateOrbitDrones(dt) {
 
   orbit.angle = (orbit.angle + dt * 2.15) % TAU
   syncOrbitPositions()
+  const impactEffectBudget = reducedEffects ? 2 : 5
+  let impactEffects = 0
 
   // At the entity caps this is at most four drones against 96 enemies. A
   // player-centered annulus rejects most enemies before any drone checks.
@@ -1365,8 +1582,13 @@ function updateOrbitDrones(dt) {
       enemy.health -= orbit.damage
       enemy.flash = 0.12
       enemy.orbitCooldown = orbit.hitInterval
-      createHitEffect(drone.x, drone.y, '#79f7ff', 3)
-      if (enemy.health <= 0) destroyEnemy(enemy)
+      if (impactEffects < impactEffectBudget) {
+        createHitEffect(drone.x, drone.y, '#79f7ff', 3)
+        impactEffects += 1
+      }
+      // Contact already has a small impact effect; avoid a second particle
+      // burst when an orbit drone lands the killing hit.
+      if (enemy.health <= 0) destroyEnemy(enemy, true)
       break
     }
   }
@@ -1403,7 +1625,9 @@ function triggerEmpBurst() {
     enemy.y += (dy / distance) * force
     enemy.health -= emp.damage
     enemy.flash = 0.18
-    if (enemy.health <= 0) destroyEnemy(enemy)
+    // The EMP ring is the entire effect. Large multi-kills must not allocate a
+    // particle-and-ring burst for every enemy inside the pulse.
+    if (enemy.health <= 0) destroyEnemy(enemy, true)
   }
   state.shake = Math.min(13, state.shake + 1.5)
 }
@@ -1468,8 +1692,13 @@ function updateEnemies(dt) {
   }
 
   // Entity caps keep this bounded; squared-distance checks avoid square roots for
-  // the overwhelming majority of pairs.
-  for (let i = 0; i < state.enemies.length; i += 1) {
+  // the overwhelming majority of pairs. Resolution work is also capped so a
+  // dense blob is relaxed over several frames instead of monopolizing one.
+  const maxSeparations = reducedEffects
+    ? Math.ceil(state.enemies.length * 1.25)
+    : state.enemies.length * 2
+  let separations = 0
+  separationLoop: for (let i = 0; i < state.enemies.length; i += 1) {
     const enemy = state.enemies[i]
     if (enemy.dead) continue
     for (let j = i + 1; j < state.enemies.length; j += 1) {
@@ -1486,69 +1715,106 @@ function updateEnemies(dt) {
         enemy.y -= (dy / distance) * push
         other.x += (dx / distance) * push
         other.y += (dy / distance) * push
+        separations += 1
+        if (separations >= maxSeparations) break separationLoop
       }
     }
   }
 }
 
+function trimOldestInPlace(items, cap) {
+  if (items.length <= cap) return
+  const excess = items.length - cap
+  for (let index = excess; index < items.length; index += 1) {
+    items[index - excess] = items[index]
+  }
+  items.length = cap
+}
+
+function compactEnemies() {
+  const enemies = state.enemies
+  let writeIndex = 0
+  for (let index = 0; index < enemies.length; index += 1) {
+    const enemy = enemies[index]
+    if (
+      enemy.dead ||
+      enemy.x <= -140 ||
+      enemy.x >= width + 140 ||
+      enemy.y <= -140 ||
+      enemy.y >= height + 140
+    ) {
+      continue
+    }
+    enemies[writeIndex] = enemy
+    writeIndex += 1
+  }
+  enemies.length = writeIndex
+  trimOldestInPlace(enemies, getEntityCap('enemies'))
+}
+
 function updateBullets(dt) {
-  for (const bullet of state.bullets) {
+  const bullets = state.bullets
+  const enemies = state.enemies
+  let writeIndex = 0
+
+  for (let bulletIndex = 0; bulletIndex < bullets.length; bulletIndex += 1) {
+    const bullet = bullets[bulletIndex]
     bullet.previousX = bullet.x
     bullet.previousY = bullet.y
     bullet.x += bullet.vx * dt
     bullet.y += bullet.vy * dt
     bullet.life -= dt
 
-    if (bullet.life <= 0) continue
+    if (
+      bullet.life <= 0 ||
+      bullet.x <= -48 ||
+      bullet.x >= width + 48 ||
+      bullet.y <= -48 ||
+      bullet.y >= height + 48
+    ) {
+      continue
+    }
 
-    for (const enemy of state.enemies) {
+    for (let enemyIndex = 0; enemyIndex < enemies.length; enemyIndex += 1) {
+      const enemy = enemies[enemyIndex]
       if (enemy.dead) continue
       const dx = bullet.x - enemy.x
       const dy = bullet.y - enemy.y
       const collisionDistance = bullet.radius + enemy.radius
-      if (dx * dx + dy * dy <= collisionDistance * collisionDistance) {
-        enemy.health -= bullet.damage
-        enemy.flash = 0.14
-        bullet.life = 0
-        createHitEffect(bullet.x, bullet.y, '#ffd077', bullet.surged ? 2 : 6)
-        createFloatingText(
-          Math.round(bullet.damage),
-          enemy.x + (Math.random() - 0.5) * 8,
-          enemy.y - enemy.radius,
-          '#ffe1a1',
-          0.58,
-          10,
-        )
-        if (enemy.health <= 0) destroyEnemy(enemy)
-        break
+      if (
+        Math.abs(dx) > collisionDistance ||
+        Math.abs(dy) > collisionDistance ||
+        dx * dx + dy * dy > collisionDistance * collisionDistance
+      ) {
+        continue
       }
+
+      enemy.health -= bullet.damage
+      enemy.flash = 0.14
+      bullet.life = 0
+      createHitEffect(bullet.x, bullet.y, '#ffd077', bullet.surged ? 2 : 6)
+      createFloatingText(
+        Math.round(bullet.damage),
+        enemy.x + (Math.random() - 0.5) * 8,
+        enemy.y - enemy.radius,
+        '#ffe1a1',
+        0.58,
+        10,
+      )
+      if (enemy.health <= 0) destroyEnemy(enemy)
+      break
+    }
+
+    if (bullet.life > 0) {
+      bullets[writeIndex] = bullet
+      writeIndex += 1
     }
   }
+  bullets.length = writeIndex
+  trimOldestInPlace(bullets, getEntityCap('bullets'))
 
-  state.bullets = state.bullets.filter(
-    (bullet) =>
-      bullet.life > 0 &&
-      bullet.x > -48 &&
-      bullet.x < width + 48 &&
-      bullet.y > -48 &&
-      bullet.y < height + 48,
-  )
-  const bulletCap = getEntityCap('bullets')
-  if (state.bullets.length > bulletCap) {
-    state.bullets.splice(0, state.bullets.length - bulletCap)
-  }
-  state.enemies = state.enemies.filter(
-    (enemy) =>
-      !enemy.dead &&
-      enemy.x > -140 &&
-      enemy.x < width + 140 &&
-      enemy.y > -140 &&
-      enemy.y < height + 140,
-  )
-  const enemyCap = getEntityCap('enemies')
-  if (state.enemies.length > enemyCap) {
-    state.enemies.splice(0, state.enemies.length - enemyCap)
-  }
+  // Dead targets are removed in the same frame they are killed, before render.
+  compactEnemies()
 }
 
 function updatePickups(dt) {
@@ -1566,11 +1832,12 @@ function updatePickups(dt) {
 
     const dx = player.x - pickup.x
     const dy = player.y - pickup.y
-    const distance = Math.hypot(dx, dy) || 1
+    const distanceSquared = dx * dx + dy * dy
     const batteryUrgency =
       pickup.type === 'battery' && player.health < player.maxHealth * 0.55 ? 1.18 : 1
     const magnetRadius = resource.magnetRadius * batteryUrgency
-    if (distance < magnetRadius) {
+    if (distanceSquared < magnetRadius * magnetRadius) {
+      const distance = Math.sqrt(distanceSquared) || 1
       const pull = (1 - distance / magnetRadius) * 1380 + 110
       pickup.x += (dx / distance) * pull * dt
       pickup.y += (dy / distance) * pull * dt
@@ -1578,59 +1845,85 @@ function updatePickups(dt) {
     pickup.x = Math.max(14, Math.min(width - 14, pickup.x))
     pickup.y = Math.max(14, Math.min(height - 14, pickup.y))
 
-    if (distance < player.radius + pickup.radius + 5) {
+    const collisionDistance = player.radius + pickup.radius + 5
+    if (distanceSquared < collisionDistance * collisionDistance) {
       collectPickup(pickup)
       if (state.mode !== 'running') break
     }
   }
 
-  state.pickups = state.pickups.filter(
-    (pickup) => !pickup.collected && pickup.age < PICKUP_LIFETIME,
-  )
-  const pickupCap = getEntityCap('pickups')
-  if (state.pickups.length > pickupCap) {
-    state.pickups.splice(0, state.pickups.length - pickupCap)
+  const pickups = state.pickups
+  let writeIndex = 0
+  for (let index = 0; index < pickups.length; index += 1) {
+    const pickup = pickups[index]
+    const isEssential =
+      pickup.type === 'battery' || pickup.type === 'reactor'
+    const lifetime =
+      reducedEffects && !isEssential ? 14 : PICKUP_LIFETIME
+    if (!pickup.collected && pickup.age < lifetime) {
+      pickups[writeIndex] = pickup
+      writeIndex += 1
+    }
   }
+  pickups.length = writeIndex
+  trimOldestInPlace(pickups, getEntityCap('pickups'))
 }
 
 function updateEffects(dt) {
-  for (const particle of state.particles) {
+  const particleDamping = Math.pow(0.07, dt)
+  const particleDecay = dt * (reducedEffects ? 1.5 : 1)
+  const particles = state.particles
+  let particleWriteIndex = 0
+  for (let index = 0; index < particles.length; index += 1) {
+    const particle = particles[index]
     particle.x += particle.vx * dt
     particle.y += particle.vy * dt
-    particle.vx *= Math.pow(0.07, dt)
-    particle.vy *= Math.pow(0.07, dt)
-    particle.life -= dt
+    particle.vx *= particleDamping
+    particle.vy *= particleDamping
+    particle.life -= particleDecay
+    if (particle.life > 0) {
+      particles[particleWriteIndex] = particle
+      particleWriteIndex += 1
+    }
   }
-  state.particles = state.particles.filter((particle) => particle.life > 0)
-  const particleCap = getEntityCap('particles')
-  if (state.particles.length > particleCap) {
-    state.particles.splice(0, state.particles.length - particleCap)
-  }
+  particles.length = particleWriteIndex
+  const particleCap = getVisualEffectCap('particles')
+  trimOldestInPlace(particles, particleCap)
 
-  for (const ring of state.rings) {
-    ring.life -= dt
-    const progress = 1 - ring.life / ring.maxLife
+  const rings = state.rings
+  let ringWriteIndex = 0
+  for (let index = 0; index < rings.length; index += 1) {
+    const ring = rings[index]
+    const decay = ring.kind === 'emp' ? dt : dt * (reducedEffects ? 1.35 : 1)
+    ring.life -= decay
+    const progress = Math.min(1, 1 - ring.life / ring.maxLife)
     ring.currentRadius = ring.radius + (ring.maxRadius - ring.radius) * progress
+    if (ring.life > 0) {
+      rings[ringWriteIndex] = ring
+      ringWriteIndex += 1
+    }
   }
-  state.rings = state.rings.filter((ring) => ring.life > 0)
-  const ringCap = getEntityCap('rings')
-  if (state.rings.length > ringCap) {
-    state.rings.splice(0, state.rings.length - ringCap)
-  }
+  rings.length = ringWriteIndex
+  const ringCap = getVisualEffectCap('rings')
+  trimOldestInPlace(rings, ringCap)
 
-  for (const text of state.floatingTexts) {
+  const textDamping = Math.pow(0.35, dt)
+  const textDecay = dt * (reducedEffects ? 1.25 : 1)
+  const floatingTexts = state.floatingTexts
+  let textWriteIndex = 0
+  for (let index = 0; index < floatingTexts.length; index += 1) {
+    const text = floatingTexts[index]
     text.y += text.vy * dt
-    text.vy *= Math.pow(0.35, dt)
-    text.life -= dt
+    text.vy *= textDamping
+    text.life -= textDecay
+    if (text.life > 0) {
+      floatingTexts[textWriteIndex] = text
+      textWriteIndex += 1
+    }
   }
-  state.floatingTexts = state.floatingTexts.filter((text) => text.life > 0)
-  const floatingTextCap = getEntityCap('floatingTexts')
-  if (state.floatingTexts.length > floatingTextCap) {
-    state.floatingTexts.splice(
-      0,
-      state.floatingTexts.length - floatingTextCap,
-    )
-  }
+  floatingTexts.length = textWriteIndex
+  const floatingTextCap = getVisualEffectCap('floatingTexts')
+  trimOldestInPlace(floatingTexts, floatingTextCap)
   state.warningFlash = Math.max(0, state.warningFlash - dt * 1.8)
   state.shake = Math.max(0, state.shake - dt * 24)
 }
@@ -1664,90 +1957,22 @@ function update(dt, wallDt = dt) {
 }
 
 function drawBackground() {
-  const gradient = ctx.createRadialGradient(
-    width * 0.5,
-    height * 0.42,
-    0,
-    width * 0.5,
-    height * 0.5,
-    Math.max(width, height) * 0.78,
-  )
-  gradient.addColorStop(0, '#162124')
-  gradient.addColorStop(0.52, '#101719')
-  gradient.addColorStop(1, '#080d0f')
-  ctx.fillStyle = gradient
-  ctx.fillRect(-30, -30, width + 60, height + 60)
+  ctx.drawImage(backgroundLayer, 0, 0, width, height)
 
   if (!reducedEffects) {
     for (const glow of ambientGlows) {
       const flicker = 0.55 + Math.sin(state.elapsed * 0.75 + glow.phase) * 0.3
-      const glowGradient = ctx.createRadialGradient(
-        glow.x,
-        glow.y,
-        0,
-        glow.x,
-        glow.y,
-        glow.radius,
-      )
-      glowGradient.addColorStop(0, `rgba(97, 176, 165, ${glow.opacity * flicker})`)
-      glowGradient.addColorStop(1, 'rgba(50, 100, 95, 0)')
-      ctx.fillStyle = glowGradient
-      ctx.fillRect(
-        glow.x - glow.radius,
-        glow.y - glow.radius,
-        glow.radius * 2,
-        glow.radius * 2,
+      ctx.globalAlpha = flicker
+      ctx.drawImage(
+        glow.sprite,
+        glow.x - glow.diameter / 2,
+        glow.y - glow.diameter / 2,
+        glow.diameter,
+        glow.diameter,
       )
     }
   }
-
-  const gridSize = 56
-  ctx.lineWidth = 1
-  for (let x = 0; x <= width; x += gridSize) {
-    ctx.strokeStyle = x % (gridSize * 4) === 0 ? 'rgba(82, 130, 127, 0.13)' : 'rgba(73, 99, 98, 0.075)'
-    ctx.beginPath()
-    ctx.moveTo(x, 0)
-    ctx.lineTo(x, height)
-    ctx.stroke()
-  }
-  for (let y = 0; y <= height; y += gridSize) {
-    ctx.strokeStyle = y % (gridSize * 4) === 0 ? 'rgba(82, 130, 127, 0.13)' : 'rgba(73, 99, 98, 0.075)'
-    ctx.beginPath()
-    ctx.moveTo(0, y)
-    ctx.lineTo(width, y)
-    ctx.stroke()
-  }
-
-  for (const mark of backgroundMarks) {
-    if (mark.patchRadius) {
-      const point = mark.points[0]
-      ctx.fillStyle = `rgba(3, 7, 8, ${mark.opacity * 0.32})`
-      ctx.beginPath()
-      ctx.ellipse(
-        point.x,
-        point.y,
-        mark.patchRadius,
-        mark.patchRadius * 0.48,
-        mark.opacity * 8,
-        0,
-        TAU,
-      )
-      ctx.fill()
-    }
-    ctx.strokeStyle = `rgba(175, 154, 118, ${mark.opacity})`
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    mark.points.forEach((point, index) => {
-      if (index === 0) ctx.moveTo(point.x, point.y)
-      else ctx.lineTo(point.x, point.y)
-    })
-    ctx.stroke()
-    if (mark.debris) {
-      const point = mark.points[0]
-      ctx.fillStyle = `rgba(124, 113, 90, ${mark.opacity + 0.05})`
-      ctx.fillRect(point.x - 2, point.y - 1, 5, 2)
-    }
-  }
+  ctx.globalAlpha = 1
 
   const dustStep = reducedEffects ? 2 : 1
   for (let i = 0; i < ambientDust.length; i += dustStep) {
@@ -1763,19 +1988,7 @@ function drawBackground() {
     ctx.fillRect(dustX, dustY, dust.size * 2.2, dust.size)
   }
   ctx.globalAlpha = 1
-
-  const vignette = ctx.createRadialGradient(
-    width / 2,
-    height / 2,
-    Math.min(width, height) * 0.25,
-    width / 2,
-    height / 2,
-    Math.max(width, height) * 0.72,
-  )
-  vignette.addColorStop(0, 'rgba(0, 0, 0, 0)')
-  vignette.addColorStop(1, 'rgba(0, 0, 0, 0.44)')
-  ctx.fillStyle = vignette
-  ctx.fillRect(0, 0, width, height)
+  ctx.drawImage(vignetteLayer, 0, 0, width, height)
 }
 
 function drawPickup(pickup) {
@@ -1783,6 +1996,10 @@ function drawPickup(pickup) {
     return
   }
   const bob = Math.sin(pickup.phase) * 3
+  if (reducedEffects) {
+    drawSimplifiedPickup(pickup, bob)
+    return
+  }
   const pulseAmount = pickup.type === 'reactor' ? 0.16 : 0.1
   const pulse = 1 + Math.sin(pickup.phase * 1.6) * pulseAmount
 
@@ -1795,6 +2012,33 @@ function drawPickup(pickup) {
   else if (pickup.type === 'scrap') drawScrapPickup(pickup)
   else if (pickup.type === 'reactor') drawReactorPickup(pickup)
 
+  ctx.restore()
+}
+
+function drawSimplifiedPickup(pickup, bob) {
+  ctx.save()
+  ctx.translate(pickup.x, pickup.y + bob)
+  ctx.fillStyle = resourceTypes[pickup.type].color
+  ctx.strokeStyle =
+    pickup.type === 'scrap' ? '#dce5e4' : 'rgba(220, 255, 255, 0.8)'
+  ctx.lineWidth = 1
+
+  if (pickup.type === 'reactor') {
+    ctx.beginPath()
+    ctx.arc(0, 0, 11, 0, TAU)
+    ctx.fill()
+    ctx.stroke()
+    ctx.fillStyle = '#ff5a36'
+    ctx.beginPath()
+    ctx.arc(0, 0, 4, 0, TAU)
+    ctx.fill()
+  } else {
+    if (pickup.type === 'scrap') ctx.rotate(pickup.phase * 0.18)
+    const halfWidth = pickup.type === 'battery' ? 7 : 8
+    const halfHeight = pickup.type === 'battery' ? 10 : 7
+    ctx.fillRect(-halfWidth, -halfHeight, halfWidth * 2, halfHeight * 2)
+    ctx.strokeRect(-halfWidth, -halfHeight, halfWidth * 2, halfHeight * 2)
+  }
   ctx.restore()
 }
 
@@ -1933,8 +2177,54 @@ function drawReactorPickup(pickup) {
   ctx.fill()
 }
 
+function drawEnemyHealthBar(enemy, healthRatio) {
+  if (healthRatio >= 0.98 || healthRatio <= 0) return
+  const barWidth = enemy.radius * 1.7
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'
+  ctx.fillRect(
+    enemy.x - barWidth / 2,
+    enemy.y - enemy.radius - 10,
+    barWidth,
+    3,
+  )
+  ctx.fillStyle = enemy.color
+  ctx.fillRect(
+    enemy.x - barWidth / 2,
+    enemy.y - enemy.radius - 10,
+    barWidth * healthRatio,
+    3,
+  )
+}
+
 function drawEnemy(enemy) {
   const healthRatio = Math.max(0, enemy.health / enemy.maxHealth)
+  if (reducedEffects) {
+    ctx.save()
+    ctx.translate(enemy.x, enemy.y)
+    ctx.rotate(enemy.angle)
+    ctx.fillStyle = enemy.flash > 0 ? '#fff1d1' : '#251d1c'
+    ctx.strokeStyle = enemy.flash > 0 ? '#fff3dc' : enemy.color
+    ctx.lineWidth = 2
+    if (enemy.type === 'scout') {
+      ctx.beginPath()
+      ctx.moveTo(13, 0)
+      ctx.lineTo(-11, 9)
+      ctx.lineTo(-11, -9)
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
+    } else {
+      const radius = enemy.radius
+      ctx.fillRect(-radius * 0.7, -radius * 0.58, radius * 1.35, radius * 1.16)
+      ctx.strokeRect(-radius * 0.7, -radius * 0.58, radius * 1.35, radius * 1.16)
+    }
+    ctx.fillStyle = '#ffcf70'
+    ctx.fillRect(enemy.radius * 0.18, -2, enemy.radius * 0.5, 4)
+    ctx.restore()
+    drawEnemyHealthBar(enemy, healthRatio)
+    return
+  }
+
   ctx.save()
   ctx.translate(enemy.x, enemy.y)
   ctx.rotate(enemy.angle)
@@ -1990,35 +2280,31 @@ function drawEnemy(enemy) {
   ctx.shadowBlur = 0
   ctx.restore()
 
-  if (healthRatio < 0.98 && healthRatio > 0) {
-    const barWidth = enemy.radius * 1.7
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'
-    ctx.fillRect(enemy.x - barWidth / 2, enemy.y - enemy.radius - 10, barWidth, 3)
-    ctx.fillStyle = enemy.color
-    ctx.fillRect(enemy.x - barWidth / 2, enemy.y - enemy.radius - 10, barWidth * healthRatio, 3)
-  }
+  drawEnemyHealthBar(enemy, healthRatio)
 }
 
 function drawBullets() {
   ctx.lineCap = 'round'
+  ctx.lineWidth = width < 700 ? 4.5 : 3.6
+  ctx.shadowBlur = 0
   for (const bullet of state.bullets) {
     const trailColor = bullet.surged ? '255, 205, 76' : '150, 250, 255'
-    const bulletColor = bullet.surged ? '#fff0a1' : '#d6fdff'
-    const glowColor = bullet.surged ? '#ffbd3d' : '#75f5ff'
     ctx.strokeStyle = `rgba(${trailColor}, 0.72)`
-    ctx.lineWidth = width < 700 ? 4.5 : 3.6
     ctx.beginPath()
     ctx.moveTo(bullet.previousX, bullet.previousY)
     ctx.lineTo(bullet.x, bullet.y)
     ctx.stroke()
-    ctx.shadowColor = glowColor
-    ctx.shadowBlur = reducedEffects ? 0 : 14
-    ctx.fillStyle = bulletColor
+  }
+
+  ctx.shadowBlur = reducedEffects ? 0 : 14
+  for (const bullet of state.bullets) {
+    ctx.shadowColor = bullet.surged ? '#ffbd3d' : '#75f5ff'
+    ctx.fillStyle = bullet.surged ? '#fff0a1' : '#d6fdff'
     ctx.beginPath()
     ctx.arc(bullet.x, bullet.y, bullet.radius, 0, TAU)
     ctx.fill()
-    ctx.shadowBlur = 0
   }
+  ctx.shadowBlur = 0
 }
 
 function drawOrbitDrones() {
@@ -2138,11 +2424,7 @@ function drawPlayer() {
     ctx.restore()
   }
 
-  const hullGradient = ctx.createLinearGradient(-18, -12, 18, 12)
-  hullGradient.addColorStop(0, '#25444a')
-  hullGradient.addColorStop(0.5, '#15282d')
-  hullGradient.addColorStop(1, '#091418')
-  ctx.fillStyle = hullGradient
+  ctx.fillStyle = '#13282d'
   ctx.strokeStyle = '#6bcbd1'
   ctx.lineWidth = 2
   ctx.beginPath()
@@ -2155,6 +2437,19 @@ function drawPlayer() {
   ctx.closePath()
   ctx.fill()
   ctx.stroke()
+
+  if (!reducedEffects) {
+    ctx.globalAlpha = 0.24
+    ctx.fillStyle = '#4c777c'
+    ctx.beginPath()
+    ctx.moveTo(18, -1)
+    ctx.lineTo(5, -10)
+    ctx.lineTo(-13, -8)
+    ctx.lineTo(-17, -1)
+    ctx.closePath()
+    ctx.fill()
+    ctx.globalAlpha = 1
+  }
 
   ctx.shadowColor = '#69f5ff'
   ctx.shadowBlur = reducedEffects ? 0 : 15
@@ -2203,12 +2498,12 @@ function drawEffects() {
   }
   ctx.globalAlpha = 1
 
+  ctx.shadowBlur = reducedEffects ? 0 : 6
   for (const particle of state.particles) {
     const alpha = Math.max(0, particle.life / particle.maxLife)
     ctx.globalAlpha = alpha
     ctx.fillStyle = particle.color
     ctx.shadowColor = particle.color
-    ctx.shadowBlur = reducedEffects ? 0 : 6
     ctx.fillRect(
       particle.x - particle.size / 2,
       particle.y - particle.size / 2,
@@ -2281,11 +2576,11 @@ function drawTouchControl() {
 }
 
 function render() {
+  drawBackground()
   ctx.save()
   const shakeX = state.shake ? (Math.random() - 0.5) * state.shake : 0
   const shakeY = state.shake ? (Math.random() - 0.5) * state.shake : 0
   ctx.translate(shakeX, shakeY)
-  drawBackground()
   state.pickups.forEach(drawPickup)
   state.enemies.forEach(drawEnemy)
   drawBullets()
@@ -2309,9 +2604,11 @@ function render() {
 function gameLoop(now) {
   const rawDt = Math.max(0, (now - lastFrame) / 1000)
   lastFrame = now
-  updatePerformanceReadout(Math.min(rawDt, 1))
+  updatePerformanceReadout(rawDt)
   updateEffectBudget()
-  const dt = Math.min(rawDt, 0.032)
+  // Simulation work is bounded after a slow frame. Spawners and EMP only get
+  // one update, so a stall cannot release a catch-up burst.
+  const dt = Math.min(rawDt, MAX_SIMULATION_DT)
   // Keep the ten-second surge honest even when a slow frame is clamped for
   // simulation stability. The upper bound avoids expiring it after tab switches.
   const wallDt = Math.min(rawDt, 0.2)
@@ -2357,6 +2654,16 @@ window.addEventListener('keyup', (event) => {
 window.addEventListener('blur', () => {
   keys.clear()
   pointer.active = false
+})
+
+document.addEventListener('visibilitychange', () => {
+  // A background tab is not an in-game spike and should not poison the
+  // smoothed diagnostics when animation resumes.
+  lastFrame = performance.now()
+  if (state) {
+    state.fpsFrames = 0
+    state.fpsTime = 0
+  }
 })
 
 canvas.addEventListener('pointerdown', (event) => {
