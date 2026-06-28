@@ -57,7 +57,7 @@ app.innerHTML = `
       </div>
 
       <div id="performance-readout" class="performance-readout">
-        FPS <b>--</b> · EN <b>0</b> · BLT <b>0</b> · PCK <b>0</b>
+        FPS <b>--</b> · EN <b>0</b> · BLT <b>0</b> · PCK <b>0</b> · PRT <b>0</b>
       </div>
 
       <div class="hud hud-bottom">
@@ -66,9 +66,10 @@ app.innerHTML = `
           <strong>ARC PULSE // AUTO</strong>
           <div class="weapon-stats">
             <span>DMG <b id="damage-stat">18</b></span>
-            <span>RATE <b id="rate-stat">1.8/s</b></span>
+            <span>ROF <b id="rate-stat">1.9 SHOTS/S</b></span>
             <span>MOVE <b id="speed-stat">230</b></span>
           </div>
+          <span id="weapon-confirmation" class="weapon-confirmation" aria-live="polite"></span>
         </div>
         <div class="controls-hint">
           <span>THREAT RESPONSE // ONLINE</span>
@@ -134,6 +135,7 @@ const ui = {
   reactorMeter: document.querySelector('#reactor-meter'),
   performanceReadout: document.querySelector('#performance-readout'),
   weaponCard: document.querySelector('.weapon-card'),
+  weaponConfirmation: document.querySelector('#weapon-confirmation'),
 }
 
 const TAU = Math.PI * 2
@@ -167,6 +169,15 @@ const MOBILE_CAPS = {
   rings: 28,
   floatingTexts: 18,
   reducedEffectsEnemies: 42,
+  surge: {
+    enemies: 48,
+    heavyEnemies: 5,
+    bullets: 48,
+    pickups: 24,
+    particles: 52,
+    rings: 16,
+    floatingTexts: 10,
+  },
 }
 
 const DESKTOP_CAPS = {
@@ -178,9 +189,21 @@ const DESKTOP_CAPS = {
   rings: 45,
   floatingTexts: 26,
   reducedEffectsEnemies: 68,
+  surge: {
+    enemies: 72,
+    heavyEnemies: 8,
+    bullets: 86,
+    pickups: 36,
+    particles: 90,
+    rings: 24,
+    floatingTexts: 14,
+  },
 }
 
 const MIN_FIRE_INTERVAL = 0.22
+const SURGE_FIRE_INTERVAL_MULTIPLIER = 0.7
+const SURGE_MIN_FIRE_INTERVAL = 0.18
+const SURGE_SPAWN_INTERVAL_MULTIPLIER = 0.94
 const PICKUP_LIFETIME = 20
 let entityCaps = DESKTOP_CAPS
 
@@ -241,6 +264,7 @@ function createInitialState() {
     batteriesCollected: 0,
     reactorSurge: 0,
     reactorSurgeDuration: 10,
+    reactorEnemyCap: 0,
     warningFlash: 0,
     fps: 60,
     fpsFrames: 0,
@@ -281,7 +305,10 @@ function resetGame() {
   ui.levelUp.hidden = true
   ui.gameOver.hidden = true
   ui.onboardingHint.classList.remove('is-hidden')
-  ui.performanceReadout.textContent = 'FPS -- · EN 0 · BLT 0 · PCK 0'
+  ui.performanceReadout.textContent =
+    'FPS -- · EN 0 · BLT 0 · PCK 0 · PRT 0'
+  ui.weaponConfirmation.textContent = ''
+  ui.weaponConfirmation.classList.remove('is-visible')
   pointer.active = false
   keys.clear()
   reducedEffects = false
@@ -381,14 +408,31 @@ function getCurrentDamage() {
 }
 
 function getCurrentFireInterval() {
+  if (!isReactorSurging()) return state.player.fireInterval
   return Math.max(
-    0.14,
-    state.player.fireInterval * (isReactorSurging() ? 0.62 : 1),
+    SURGE_MIN_FIRE_INTERVAL,
+    state.player.fireInterval * SURGE_FIRE_INTERVAL_MULTIPLIER,
   )
 }
 
+function getEntityCap(type) {
+  if (!isReactorSurging()) return entityCaps[type]
+  if (type === 'enemies' && state.reactorEnemyCap > 0) {
+    return Math.min(entityCaps.enemies, state.reactorEnemyCap)
+  }
+  return Math.min(entityCaps[type], entityCaps.surge[type])
+}
+
 function updateEffectBudget() {
+  const surgeLoad =
+    isReactorSurging() &&
+    (state.fps < 48 ||
+      state.enemies.length >= getEntityCap('enemies') * 0.66 ||
+      state.particles.length >= getEntityCap('particles') * 0.55 ||
+      state.bullets.length >= getEntityCap('bullets') * 0.65)
+
   reducedEffects =
+    surgeLoad ||
     state.enemies.length >= entityCaps.reducedEffectsEnemies ||
     state.particles.length >= entityCaps.particles * 0.72 ||
     state.bullets.length >= entityCaps.bullets * 0.75 ||
@@ -405,7 +449,8 @@ function updatePerformanceReadout(rawDt) {
   state.fpsTime = 0
   ui.performanceReadout.textContent =
     `FPS ${state.fps} · EN ${state.enemies.length} · ` +
-    `BLT ${state.bullets.length} · PCK ${state.pickups.length}`
+    `BLT ${state.bullets.length} · PCK ${state.pickups.length} · ` +
+    `PRT ${state.particles.length}`
 }
 
 function updateHud() {
@@ -423,7 +468,8 @@ function updateHud() {
   ui.scrap.textContent = String(state.scrap).padStart(3, '0')
   ui.kills.textContent = String(state.kills).padStart(3, '0')
   ui.damage.textContent = Math.round(getCurrentDamage())
-  ui.rate.textContent = `${(1 / getCurrentFireInterval()).toFixed(1)}/s`
+  ui.rate.textContent =
+    `${(1 / getCurrentFireInterval()).toFixed(1)} SHOTS/S`
   ui.speed.textContent = Math.round(player.speed)
 
   const surging = isReactorSurging()
@@ -476,7 +522,7 @@ function randomEnemyType() {
 }
 
 function spawnEnemy(forcedType = null) {
-  if (state.enemies.length >= entityCaps.enemies) return false
+  if (state.enemies.length >= getEntityCap('enemies')) return false
 
   const margin = 34
   const side = Math.floor(Math.random() * 4)
@@ -503,7 +549,10 @@ function spawnEnemy(forcedType = null) {
     for (const enemy of state.enemies) {
       if (!enemy.dead && enemy.type === 'heavy') heavyCount += 1
     }
-    if (heavyCount >= entityCaps.heavyEnemies) typeName = 'scavenger'
+    const heavyCap = isReactorSurging()
+      ? entityCaps.surge.heavyEnemies
+      : entityCaps.heavyEnemies
+    if (heavyCount >= heavyCap) typeName = 'scavenger'
   }
   const type = enemyTypes[typeName]
   const healthMilestones = Math.floor(state.elapsed / 45)
@@ -563,7 +612,7 @@ function findNearestEnemy() {
 
 function fireAtNearestEnemy(target = findNearestEnemy()) {
   if (!target) return false
-  if (state.bullets.length >= entityCaps.bullets) return true
+  if (state.bullets.length >= getEntityCap('bullets')) return true
 
   const player = state.player
   const targetDistance = Math.hypot(target.x - player.x, target.y - player.y)
@@ -605,22 +654,27 @@ function fireAtNearestEnemy(target = findNearestEnemy()) {
 }
 
 function addRing(ring, important = false) {
+  const ringCap = getEntityCap('rings')
   if (
     !important &&
     reducedEffects &&
-    state.rings.length >= entityCaps.rings * 0.7
+    state.rings.length >= ringCap * 0.7
   ) {
     return
   }
-  if (state.rings.length >= entityCaps.rings) state.rings.shift()
+  if (state.rings.length >= ringCap) state.rings.shift()
   state.rings.push(ring)
 }
 
 function createMuzzleEffect(x, y, dx, dy, surged = false) {
-  const color = surged ? '#ffd35c' : '#65f6ff'
+  // Surged shots already have a bright projectile trail and muzzle flash. Avoid
+  // allocating a ring and several particles for every high-rate shot.
+  if (surged) return
+
+  const color = '#65f6ff'
   addRing({ x, y, radius: 2, maxRadius: 13, life: 0.14, maxLife: 0.14, color })
   const particleCount = reducedEffects ? 1 : 3
-  const availableParticles = entityCaps.particles - state.particles.length
+  const availableParticles = getEntityCap('particles') - state.particles.length
   for (let i = 0; i < Math.min(particleCount, availableParticles); i += 1) {
     const spread = (Math.random() - 0.5) * 1.2
     state.particles.push({
@@ -631,14 +685,16 @@ function createMuzzleEffect(x, y, dx, dy, surged = false) {
       size: 1.5 + Math.random() * 2,
       life: 0.12 + Math.random() * 0.1,
       maxLife: 0.22,
-      color: surged ? '#ffe48a' : '#adfbff',
+      color: '#adfbff',
     })
   }
 }
 
 function createHitEffect(x, y, color = '#ffb064', count = 5) {
-  const effectCount = reducedEffects ? Math.ceil(count * 0.42) : count
-  const availableParticles = entityCaps.particles - state.particles.length
+  const surgeScale = isReactorSurging() ? 0.48 : 1
+  const budgetScale = reducedEffects ? 0.42 : 1
+  const effectCount = Math.ceil(count * surgeScale * budgetScale)
+  const availableParticles = getEntityCap('particles') - state.particles.length
   for (let i = 0; i < Math.min(effectCount, availableParticles); i += 1) {
     const angle = Math.random() * TAU
     const speed = 35 + Math.random() * 135
@@ -664,8 +720,9 @@ function createFloatingText(
   size = 11,
   important = false,
 ) {
-  if (reducedEffects && !important) return
-  if (state.floatingTexts.length >= entityCaps.floatingTexts) {
+  if ((reducedEffects || isReactorSurging()) && !important) return
+  const floatingTextCap = getEntityCap('floatingTexts')
+  if (state.floatingTexts.length >= floatingTextCap) {
     if (!important) return
     state.floatingTexts.shift()
   }
@@ -714,7 +771,8 @@ function rollResourceDrop(enemyType) {
 }
 
 function spawnResourcePickup(type, enemy) {
-  const atPickupCap = state.pickups.length >= entityCaps.pickups
+  const pickupCap = getEntityCap('pickups')
+  const atPickupCap = state.pickups.length >= pickupCap
   const isEssential = type === 'battery' || type === 'reactor'
   if (atPickupCap) {
     if (!isEssential) return
@@ -725,8 +783,8 @@ function spawnResourcePickup(type, enemy) {
     state.pickups.splice(replaceableIndex, 1)
   } else if (
     !isEssential &&
-    state.pickups.length >= entityCaps.pickups * 0.75 &&
-    Math.random() < 0.55
+    state.pickups.length >= pickupCap * 0.65 &&
+    Math.random() < (isReactorSurging() ? 0.72 : 0.55)
   ) {
     return
   }
@@ -822,6 +880,13 @@ function collectScrap(pickup) {
 
 function collectReactor(pickup) {
   state.reactorSurge = state.reactorSurgeDuration
+  // Never grow a pre-existing crowd when surge starts. Typical mobile runs use
+  // the lower surge ceiling; a busier scene is frozen at its current count
+  // instead of visibly deleting live enemies.
+  state.reactorEnemyCap = Math.min(
+    entityCaps.enemies,
+    Math.max(state.enemies.length, entityCaps.surge.enemies),
+  )
   state.warningFlash = 0.85
   state.shake = Math.min(12, state.shake + 5)
   state.introClock = 0
@@ -945,6 +1010,10 @@ function chooseUpgrade(id) {
   ui.weaponCard.classList.remove('upgrade-flash')
   void ui.weaponCard.offsetWidth
   ui.weaponCard.classList.add('upgrade-flash')
+  ui.weaponConfirmation.textContent = upgrade.confirmation
+  ui.weaponConfirmation.classList.remove('is-visible')
+  void ui.weaponConfirmation.offsetWidth
+  ui.weaponConfirmation.classList.add('is-visible')
   lastFrame = performance.now()
 }
 
@@ -995,19 +1064,21 @@ function updateSpawning(dt) {
   state.spawnClock -= dt
   if (state.spawnClock > 0) return
 
-  const surgePressure = isReactorSurging() ? 0.88 : 1
+  const surging = isReactorSurging()
+  const surgePressure = surging ? SURGE_SPAWN_INTERVAL_MULTIPLIER : 1
   const baseSpawnInterval = Math.max(
     0.31,
     0.86 - Math.min(state.elapsed, 180) * 0.00305,
   )
   const spawnInterval = baseSpawnInterval * surgePressure
-  const waveChance = Math.max(
+  const baseWaveChance = Math.max(
     0,
     Math.min(0.12, (state.elapsed - 55) * 0.00085),
   )
+  const waveChance = surging ? Math.min(0.06, baseWaveChance) : baseWaveChance
   const waveSize = Math.random() < waveChance ? 2 : 1
   const maxEnemies = Math.min(
-    entityCaps.enemies,
+    getEntityCap('enemies'),
     26 + Math.floor(state.elapsed * 0.28),
   )
   let forcedType = null
@@ -1139,7 +1210,7 @@ function updateBullets(dt) {
         enemy.health -= bullet.damage
         enemy.flash = 0.14
         bullet.life = 0
-        createHitEffect(bullet.x, bullet.y, '#ffd077', 6)
+        createHitEffect(bullet.x, bullet.y, '#ffd077', bullet.surged ? 2 : 6)
         createFloatingText(
           Math.round(bullet.damage),
           enemy.x + (Math.random() - 0.5) * 8,
@@ -1162,8 +1233,9 @@ function updateBullets(dt) {
       bullet.y > -48 &&
       bullet.y < height + 48,
   )
-  if (state.bullets.length > entityCaps.bullets) {
-    state.bullets.splice(0, state.bullets.length - entityCaps.bullets)
+  const bulletCap = getEntityCap('bullets')
+  if (state.bullets.length > bulletCap) {
+    state.bullets.splice(0, state.bullets.length - bulletCap)
   }
   state.enemies = state.enemies.filter(
     (enemy) =>
@@ -1173,8 +1245,9 @@ function updateBullets(dt) {
       enemy.y > -140 &&
       enemy.y < height + 140,
   )
-  if (state.enemies.length > entityCaps.enemies) {
-    state.enemies.splice(0, state.enemies.length - entityCaps.enemies)
+  const enemyCap = getEntityCap('enemies')
+  if (state.enemies.length > enemyCap) {
+    state.enemies.splice(0, state.enemies.length - enemyCap)
   }
 }
 
@@ -1214,8 +1287,9 @@ function updatePickups(dt) {
   state.pickups = state.pickups.filter(
     (pickup) => !pickup.collected && pickup.age < PICKUP_LIFETIME,
   )
-  if (state.pickups.length > entityCaps.pickups) {
-    state.pickups.splice(0, state.pickups.length - entityCaps.pickups)
+  const pickupCap = getEntityCap('pickups')
+  if (state.pickups.length > pickupCap) {
+    state.pickups.splice(0, state.pickups.length - pickupCap)
   }
 }
 
@@ -1228,8 +1302,9 @@ function updateEffects(dt) {
     particle.life -= dt
   }
   state.particles = state.particles.filter((particle) => particle.life > 0)
-  if (state.particles.length > entityCaps.particles) {
-    state.particles.splice(0, state.particles.length - entityCaps.particles)
+  const particleCap = getEntityCap('particles')
+  if (state.particles.length > particleCap) {
+    state.particles.splice(0, state.particles.length - particleCap)
   }
 
   for (const ring of state.rings) {
@@ -1238,8 +1313,9 @@ function updateEffects(dt) {
     ring.currentRadius = ring.radius + (ring.maxRadius - ring.radius) * progress
   }
   state.rings = state.rings.filter((ring) => ring.life > 0)
-  if (state.rings.length > entityCaps.rings) {
-    state.rings.splice(0, state.rings.length - entityCaps.rings)
+  const ringCap = getEntityCap('rings')
+  if (state.rings.length > ringCap) {
+    state.rings.splice(0, state.rings.length - ringCap)
   }
 
   for (const text of state.floatingTexts) {
@@ -1248,27 +1324,28 @@ function updateEffects(dt) {
     text.life -= dt
   }
   state.floatingTexts = state.floatingTexts.filter((text) => text.life > 0)
-  if (state.floatingTexts.length > entityCaps.floatingTexts) {
+  const floatingTextCap = getEntityCap('floatingTexts')
+  if (state.floatingTexts.length > floatingTextCap) {
     state.floatingTexts.splice(
       0,
-      state.floatingTexts.length - entityCaps.floatingTexts,
+      state.floatingTexts.length - floatingTextCap,
     )
   }
   state.warningFlash = Math.max(0, state.warningFlash - dt * 1.8)
   state.shake = Math.max(0, state.shake - dt * 24)
 }
 
-function update(dt) {
+function update(dt, wallDt = dt) {
   if (state.mode !== 'running') {
-    updateEffects(dt)
+    updateEffects(wallDt)
     return
   }
 
   state.elapsed += dt
-  state.reactorSurge = Math.max(0, state.reactorSurge - dt)
+  state.reactorSurge = Math.max(0, state.reactorSurge - wallDt)
   state.introClock -= dt
   if (state.introClock <= 0) ui.onboardingHint.classList.add('is-hidden')
-  state.hudClock -= dt
+  state.hudClock -= wallDt
   updatePlayer(dt)
   updateSpawning(dt)
   updateShooting(dt)
@@ -1276,7 +1353,7 @@ function update(dt) {
   if (state.mode !== 'running') return
   updateBullets(dt)
   updatePickups(dt)
-  updateEffects(dt)
+  updateEffects(wallDt)
 
   if (state.hudClock <= 0) {
     updateHud()
@@ -1658,7 +1735,7 @@ function drawPlayer() {
     ctx.globalAlpha = 0.22 + shieldRatio * 0.22
     ctx.strokeStyle = '#65d9ff'
     ctx.shadowColor = '#5acbff'
-    ctx.shadowBlur = 14
+    ctx.shadowBlur = reducedEffects ? 0 : 14
     ctx.lineWidth = 1.5
     ctx.beginPath()
     ctx.arc(0, 0, player.radius + 11 + Math.sin(state.elapsed * 4) * 1.5, 0, TAU)
@@ -1669,7 +1746,7 @@ function drawPlayer() {
     ctx.globalAlpha = 0.4 + Math.sin(state.elapsed * 8) * 0.1
     ctx.strokeStyle = '#ffbf3e'
     ctx.shadowColor = '#ff8a34'
-    ctx.shadowBlur = 24
+    ctx.shadowBlur = reducedEffects ? 8 : 24
     ctx.lineWidth = 2
     ctx.beginPath()
     ctx.arc(0, 0, player.radius + 17, -0.6, 1.25)
@@ -1682,7 +1759,7 @@ function drawPlayer() {
   ctx.globalAlpha = surged ? 0.58 : 0.35
   ctx.fillStyle = surged ? '#ffe169' : '#65f5ff'
   ctx.shadowColor = surged ? '#ffad36' : '#5befff'
-  ctx.shadowBlur = surged ? 30 : 18
+  ctx.shadowBlur = reducedEffects ? (surged ? 10 : 0) : surged ? 30 : 18
   ctx.beginPath()
   ctx.ellipse(-15, 0, 25, 10, 0, 0, TAU)
   ctx.fill()
@@ -1735,7 +1812,7 @@ function drawPlayer() {
   ctx.stroke()
 
   ctx.shadowColor = '#69f5ff'
-  ctx.shadowBlur = 15
+  ctx.shadowBlur = reducedEffects ? 0 : 15
   ctx.fillStyle = '#9dfaff'
   ctx.fillRect(1, -3, 17, 6)
   ctx.fillStyle = '#67e8f1'
@@ -1751,7 +1828,7 @@ function drawPlayer() {
     const glowStrength = player.muzzleGlow / 0.11
     ctx.globalAlpha = glowStrength
     ctx.shadowColor = surged ? '#ffca4f' : '#9bfbff'
-    ctx.shadowBlur = 24
+    ctx.shadowBlur = reducedEffects ? 8 : 24
     ctx.fillStyle = surged ? '#fff1a3' : '#eaffff'
     ctx.beginPath()
     ctx.moveTo(30, 0)
@@ -1807,6 +1884,29 @@ function drawEffects() {
   ctx.shadowBlur = 0
 }
 
+function drawSurgePulse() {
+  if (!isReactorSurging()) return
+
+  const pulse = (Math.sin(state.elapsed * 7.5) + 1) * 0.5
+  ctx.save()
+  ctx.globalAlpha = 0.025 + pulse * 0.018
+  ctx.fillStyle = '#ff9e32'
+  ctx.fillRect(0, 0, width, height)
+  ctx.globalAlpha = 0.22 + pulse * 0.18
+  ctx.strokeStyle = '#ffc34c'
+  ctx.lineWidth = reducedEffects ? 1.5 : 2
+  ctx.beginPath()
+  ctx.arc(
+    state.player.x,
+    state.player.y,
+    state.player.radius + 27 + pulse * 8,
+    0,
+    TAU,
+  )
+  ctx.stroke()
+  ctx.restore()
+}
+
 function drawTouchControl() {
   if (!pointer.active) return
   const dx = pointer.x - pointer.originX
@@ -1840,6 +1940,7 @@ function render() {
   state.enemies.forEach(drawEnemy)
   drawBullets()
   drawPlayer()
+  drawSurgePulse()
   drawEffects()
   drawTouchControl()
   ctx.restore()
@@ -1860,7 +1961,10 @@ function gameLoop(now) {
   updatePerformanceReadout(Math.min(rawDt, 1))
   updateEffectBudget()
   const dt = Math.min(rawDt, 0.032)
-  update(dt)
+  // Keep the ten-second surge honest even when a slow frame is clamped for
+  // simulation stability. The upper bound avoids expiring it after tab switches.
+  const wallDt = Math.min(rawDt, 0.2)
+  update(dt, wallDt)
   render()
   requestAnimationFrame(gameLoop)
 }

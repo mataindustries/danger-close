@@ -472,6 +472,7 @@ button {
 }
 
 .weapon-card {
+  position: relative;
   min-width: 222px;
   padding: 11px 13px;
   border-left: 2px solid var(--cyan);
@@ -520,6 +521,26 @@ button {
 
 .weapon-card.is-surging .weapon-stats b {
   color: #ffd467;
+}
+
+.weapon-confirmation {
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 0;
+  padding: 4px 7px;
+  pointer-events: none;
+  color: #bdfcff;
+  border-left: 2px solid var(--cyan);
+  background: rgba(4, 15, 17, 0.9);
+  font-family: var(--font-display);
+  font-size: 0.52rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0;
+}
+
+.weapon-confirmation.is-visible {
+  animation: weapon-confirmation 1.35s ease-out forwards;
 }
 
 .controls-hint {
@@ -845,6 +866,22 @@ button {
   }
 }
 
+@keyframes weapon-confirmation {
+  0% {
+    transform: translateY(5px);
+    opacity: 0;
+  }
+  14%,
+  72% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-4px);
+    opacity: 0;
+  }
+}
+
 @media (max-width: 760px) {
   .game-shell {
     min-height: 500px;
@@ -1099,7 +1136,8 @@ button {
 
   .upgrade-card,
   .restart-button,
-  .weapon-card {
+  .weapon-card,
+  .weapon-confirmation {
     transition: none;
     animation: none;
   }
