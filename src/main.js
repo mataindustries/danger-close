@@ -41,6 +41,19 @@ app.innerHTML = `
         </div>
       </div>
 
+      <div id="boss-health" class="boss-health" hidden aria-live="polite">
+        <div>
+          <span>Priority threat</span>
+          <strong>Harvester Titan</strong>
+          <b id="boss-health-text">1450 / 1450</b>
+        </div>
+        <div class="boss-health-track"><i id="boss-health-bar"></i></div>
+      </div>
+
+      <div id="boss-warning" class="boss-warning" hidden role="status">
+        Harvester Titan detected
+      </div>
+
       <div id="mission-panel" class="mission-panel" aria-live="polite">
         <div class="mission-heading">
           <span>Mission objective</span>
@@ -73,7 +86,7 @@ app.innerHTML = `
       </div>
 
       <div id="performance-readout" class="performance-readout">
-        <span id="performance-values">FPS -- · EN 0 · BLT 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · FT --MS</span>
+        <span id="performance-values">FPS -- · EN 0 · BLT 0 · BP 0 · MN 0 · BX 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · FT --MS</span>
         <b id="spike-indicator" class="spike-indicator" hidden>SPIKE</b>
       </div>
 
@@ -166,6 +179,11 @@ app.innerHTML = `
             <div><span>GPUs collected</span><strong id="summary-gpus">0</strong></div>
             <div><span>Reactor cores</span><strong id="summary-reactors">0</strong></div>
           </div>
+          <div class="titan-summary">
+            <span>Harvester Titan</span>
+            <strong id="summary-titan">Avoided</strong>
+            <small id="summary-titan-bonus" hidden>Titan destroyed bonus</small>
+          </div>
           <div class="reward-panel">
             <span>Permanent resources earned</span>
             <div>
@@ -210,6 +228,10 @@ const ui = {
   missionSalvage: document.querySelector('#mission-salvage'),
   extractionButton: document.querySelector('#extraction-button'),
   extractionCountdown: document.querySelector('#extraction-countdown'),
+  bossHealth: document.querySelector('#boss-health'),
+  bossHealthText: document.querySelector('#boss-health-text'),
+  bossHealthBar: document.querySelector('#boss-health-bar'),
+  bossWarning: document.querySelector('#boss-warning'),
   orbitStatus: document.querySelector('#orbit-status'),
   orbitCount: document.querySelector('#orbit-count-stat'),
   orbitDamage: document.querySelector('#orbit-damage-stat'),
@@ -243,6 +265,8 @@ const ui = {
   summaryScrap: document.querySelector('#summary-scrap'),
   summaryGpus: document.querySelector('#summary-gpus'),
   summaryReactors: document.querySelector('#summary-reactors'),
+  summaryTitan: document.querySelector('#summary-titan'),
+  summaryTitanBonus: document.querySelector('#summary-titan-bonus'),
   rewardScrap: document.querySelector('#reward-scrap'),
   rewardGpu: document.querySelector('#reward-gpu'),
   rewardReactor: document.querySelector('#reward-reactor'),
@@ -288,6 +312,9 @@ const MOBILE_CAPS = {
   heavyEnemies: 7,
   reclaimers: 1,
   bullets: 90,
+  bossProjectiles: 24,
+  bossMines: 8,
+  bossEffects: 18,
   pickups: 40,
   particles: 130,
   rings: 28,
@@ -298,6 +325,9 @@ const MOBILE_CAPS = {
     heavyEnemies: 5,
     reclaimers: 1,
     bullets: 48,
+    bossProjectiles: 18,
+    bossMines: 6,
+    bossEffects: 12,
     pickups: 24,
     particles: 52,
     rings: 16,
@@ -310,6 +340,9 @@ const DESKTOP_CAPS = {
   heavyEnemies: 10,
   reclaimers: 2,
   bullets: 150,
+  bossProjectiles: 36,
+  bossMines: 12,
+  bossEffects: 28,
   pickups: 60,
   particles: 220,
   rings: 45,
@@ -320,6 +353,9 @@ const DESKTOP_CAPS = {
     heavyEnemies: 8,
     reclaimers: 1,
     bullets: 86,
+    bossProjectiles: 26,
+    bossMines: 8,
+    bossEffects: 18,
     pickups: 36,
     particles: 90,
     rings: 24,
@@ -339,6 +375,13 @@ const SAVE_VERSION = 1
 const MAX_UPGRADE_RANK = 5
 const MISSION_SALVAGE_REQUIRED = 220
 const EXTRACTION_DURATION = 60
+const TITAN_SPAWN_DELAY = 2.25
+const TITAN_MAX_HEALTH = 1450
+const TITAN_REWARD = {
+  scrap: 30,
+  gpu: 6,
+  reactor: 1,
+}
 const SALVAGE_VALUES = {
   gpu: 3,
   scrap: 2,
@@ -561,6 +604,12 @@ function createInitialState() {
       extractionTime: EXTRACTION_DURATION,
       extractionDuration: EXTRACTION_DURATION,
     },
+    titan: {
+      status: 'idle',
+      spawnTimer: TITAN_SPAWN_DELAY,
+      warningTime: 0,
+      boss: null,
+    },
     kills: 0,
     nextEntityId: 1,
     player: {
@@ -603,6 +652,9 @@ function createInitialState() {
     },
     enemies: [],
     bullets: [],
+    bossProjectiles: [],
+    bossMines: [],
+    bossEffects: [],
     pickups: [],
     particles: [],
     rings: [],
@@ -669,7 +721,7 @@ function resetGame() {
   ui.levelUp.hidden = true
   ui.onboardingHint.classList.remove('is-hidden')
   ui.performanceValues.textContent =
-    'FPS -- · EN 0 · BLT 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · FT --MS'
+    'FPS -- · EN 0 · BLT 0 · BP 0 · MN 0 · BX 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · FT --MS'
   ui.spikeIndicator.hidden = true
   ui.weaponConfirmation.textContent = ''
   ui.weaponConfirmation.classList.remove('is-visible')
@@ -934,6 +986,8 @@ function updateEffectBudget() {
     state.enemies.length >= entityCaps.reducedEffectsEnemies ||
     state.particles.length >= entityCaps.particles * 0.72 ||
     state.bullets.length >= entityCaps.bullets * 0.75 ||
+    state.bossProjectiles.length >= entityCaps.bossProjectiles * 0.8 ||
+    state.bossEffects.length >= entityCaps.bossEffects * 0.8 ||
     state.pickups.length >= entityCaps.pickups * 0.65
 }
 
@@ -973,7 +1027,9 @@ function updatePerformanceReadout(rawDt) {
     state.diagnosticsClock = 0
     ui.performanceValues.textContent =
       `FPS ${Math.round(state.fps)} · EN ${state.enemies.length} · ` +
-      `BLT ${state.bullets.length} · PCK ${state.pickups.length} · ` +
+      `BLT ${state.bullets.length} · BP ${state.bossProjectiles.length} · ` +
+      `MN ${state.bossMines.length} · BX ${state.bossEffects.length} · ` +
+      `PCK ${state.pickups.length} · ` +
       `PRT ${state.particles.length} · TXT ${state.floatingTexts.length} · ` +
       `FX ${state.rings.length} · FT ${state.frameMs.toFixed(1)}MS`
   }
@@ -1042,6 +1098,22 @@ function updateHud() {
     !mission.extractionActive || state.mode !== 'running'
   ui.extractionCountdown.textContent =
     `${Math.max(0, Math.ceil(mission.extractionTime))}s`
+
+  const titanActive =
+    state.mode === 'running' &&
+    state.titan.status === 'active' &&
+    state.titan.boss
+  ui.bossHealth.hidden = !titanActive
+  ui.bossWarning.hidden =
+    state.mode !== 'running' || state.titan.warningTime <= 0
+  if (titanActive) {
+    const titan = state.titan.boss
+    const health = Math.max(0, titan.health)
+    ui.bossHealthText.textContent =
+      `${Math.ceil(health)} / ${titan.maxHealth}`
+    ui.bossHealthBar.style.width =
+      `${Math.max(0, Math.min(100, (health / titan.maxHealth) * 100))}%`
+  }
 
   const surging = isReactorSurging()
   ui.reactorStatus.hidden = !surging
@@ -1148,14 +1220,23 @@ function handleResetSave() {
 
 function calculateRunRewards(success) {
   const recoveryRate = success ? 1 : 0.55
+  const titanReward =
+    state.titan.status === 'destroyed'
+      ? TITAN_REWARD
+      : { scrap: 0, gpu: 0, reactor: 0 }
   return {
     scrap:
-      Math.floor(state.scrap * recoveryRate) + (success ? 24 : 0),
+      Math.floor(state.scrap * recoveryRate) +
+      (success ? 24 : 0) +
+      titanReward.scrap,
     gpu:
-      Math.floor(state.totalGpu * recoveryRate) + (success ? 6 : 0),
+      Math.floor(state.totalGpu * recoveryRate) +
+      (success ? 6 : 0) +
+      titanReward.gpu,
     reactor:
       Math.floor(state.reactorCoresCollected * recoveryRate) +
-      (success ? 1 : 0),
+      (success ? 1 : 0) +
+      titanReward.reactor,
   }
 }
 
@@ -1190,6 +1271,21 @@ function finishRun(success) {
   ui.summaryScrap.textContent = state.scrap
   ui.summaryGpus.textContent = state.totalGpu
   ui.summaryReactors.textContent = state.reactorCoresCollected
+  if (state.titan.status === 'destroyed') {
+    ui.summaryTitan.textContent = 'Destroyed'
+    ui.summaryTitanBonus.textContent =
+      `Titan destroyed bonus · +${TITAN_REWARD.scrap} SCR · ` +
+      `+${TITAN_REWARD.gpu} GPU · +${TITAN_REWARD.reactor} RCT`
+    ui.summaryTitanBonus.hidden = false
+  } else if (state.titan.status === 'active') {
+    ui.summaryTitan.textContent = success
+      ? 'Active at extraction'
+      : 'Active at signal loss'
+    ui.summaryTitanBonus.hidden = true
+  } else {
+    ui.summaryTitan.textContent = 'Avoided'
+    ui.summaryTitanBonus.hidden = true
+  }
   ui.rewardScrap.textContent = rewards.scrap
   ui.rewardGpu.textContent = rewards.gpu
   ui.rewardReactor.textContent = rewards.reactor
@@ -1245,6 +1341,8 @@ function callExtraction() {
 
   mission.extractionActive = true
   mission.extractionTime = mission.extractionDuration
+  state.titan.status = 'pending'
+  state.titan.spawnTimer = TITAN_SPAWN_DELAY
   state.spawnClock = Math.min(state.spawnClock, 0.18)
   state.introClock = 0
   ui.onboardingHint.classList.add('is-hidden')
@@ -1292,6 +1390,398 @@ function updateMission(wallDt) {
     state.mission.extractionTime - wallDt,
   )
   if (state.mission.extractionTime <= 0) winGame()
+}
+
+function spawnHarvesterTitan() {
+  if (state.titan.status !== 'pending' || state.mode !== 'running') return
+
+  const radius = width < 520 ? 52 : 60
+  const margin = radius * 0.48
+  const player = state.player
+  const candidates = [
+    {
+      x: -margin,
+      y: Math.max(radius, Math.min(height - radius, player.y)),
+    },
+    {
+      x: width + margin,
+      y: Math.max(radius, Math.min(height - radius, player.y)),
+    },
+    {
+      x: Math.max(radius, Math.min(width - radius, player.x)),
+      y: -margin,
+    },
+    {
+      x: Math.max(radius, Math.min(width - radius, player.x)),
+      y: height + margin,
+    },
+  ]
+  let spawn = candidates[0]
+  let greatestDistance = -1
+  for (const candidate of candidates) {
+    const dx = candidate.x - player.x
+    const dy = candidate.y - player.y
+    const distanceSquared = dx * dx + dy * dy
+    if (distanceSquared > greatestDistance) {
+      greatestDistance = distanceSquared
+      spawn = candidate
+    }
+  }
+
+  state.titan.boss = {
+    id: state.nextEntityId++,
+    type: 'titan',
+    x: spawn.x,
+    y: spawn.y,
+    radius,
+    speed: 30,
+    health: TITAN_MAX_HEALTH,
+    maxHealth: TITAN_MAX_HEALTH,
+    damage: 22,
+    color: '#ff743d',
+    angle: 0,
+    vx: 0,
+    vy: 0,
+    phase: 0,
+    flash: 0,
+    orbitCooldown: 0,
+    mineClock: 2.2,
+    burstClock: 3.4,
+    pullClock: 5.8,
+    pullWarning: 0,
+    pullActive: 0,
+    dead: false,
+  }
+  state.titan.status = 'active'
+  state.titan.warningTime = 2.6
+  state.warningFlash = Math.max(state.warningFlash, 1.25)
+  state.shake = Math.min(13, state.shake + 5)
+  createFloatingText(
+    'HARVESTER TITAN DETECTED',
+    player.x,
+    player.y - 66,
+    '#ffb052',
+    2.2,
+    width < 520 ? 13 : 16,
+    true,
+  )
+  addRing({
+    x: spawn.x,
+    y: spawn.y,
+    radius: radius * 0.65,
+    maxRadius: radius * 2.4,
+    life: 0.9,
+    maxLife: 0.9,
+    color: '#ff753f',
+  }, true)
+  updateHud()
+}
+
+function applyTitanDamage(amount) {
+  if (state.titan.status !== 'active' || !state.titan.boss) return false
+  const boss = state.titan.boss
+  boss.health -= amount
+  boss.flash = 0.14
+  if (boss.health <= 0) destroyHarvesterTitan()
+  return true
+}
+
+function destroyHarvesterTitan() {
+  if (state.titan.status !== 'active' || !state.titan.boss) return
+  const boss = state.titan.boss
+  boss.dead = true
+  boss.health = 0
+  state.titan.status = 'destroyed'
+  state.titan.warningTime = 0
+  state.bossProjectiles.length = 0
+  state.bossMines.length = 0
+  state.kills += 12
+  state.shake = Math.min(15, state.shake + 11)
+  state.warningFlash = Math.max(state.warningFlash, 0.9)
+
+  // Scrapping the Titan immediately provides a short pressure-release surge.
+  // The fixed permanent reward is added once when the run is finalized.
+  state.reactorSurge = Math.max(
+    state.reactorSurge,
+    Math.min(6, state.reactorSurgeDuration),
+  )
+  state.reactorEnemyCap = Math.min(
+    entityCaps.enemies,
+    Math.max(state.enemies.length, entityCaps.surge.enemies),
+  )
+
+  const effectCap = getEntityCap('bossEffects')
+  const effectCount = Math.min(reducedEffects ? 12 : 22, effectCap)
+  for (let index = 0; index < effectCount; index += 1) {
+    const angle = (index / effectCount) * TAU + Math.random() * 0.22
+    const speed = 45 + Math.random() * 145
+    const life = 0.55 + Math.random() * 0.65
+    state.bossEffects.push({
+      x: boss.x,
+      y: boss.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      size: 3 + Math.random() * 7,
+      rotation: angle,
+      spin: (Math.random() - 0.5) * 8,
+      life,
+      maxLife: life,
+      color: index % 3 === 0 ? '#ffcf65' : index % 2 ? '#ff6439' : '#7b8583',
+    })
+  }
+  createHitEffect(boss.x, boss.y, '#ffb044', 28)
+  addRing({
+    x: boss.x,
+    y: boss.y,
+    radius: boss.radius * 0.5,
+    maxRadius: boss.radius * 3.1,
+    life: 0.8,
+    maxLife: 0.8,
+    color: '#ff9e45',
+  }, true)
+  createFloatingText(
+    'TITAN SCRAPPED',
+    boss.x,
+    boss.y - boss.radius,
+    '#ffe083',
+    2,
+    width < 520 ? 14 : 17,
+    true,
+  )
+
+  // A small physical salvage burst supplements the guaranteed summary reward.
+  spawnResourcePickup('battery', boss)
+  spawnResourcePickup('gpu', boss)
+  spawnResourcePickup('scrap', boss)
+  updateHud()
+}
+
+function damagePlayerFromTitan(amount, cooldown = 0.72) {
+  const player = state.player
+  if (player.hitCooldown > 0 || state.mode !== 'running') return false
+
+  const damage = applyPlayerDamage(amount)
+  const blockedByShield =
+    damage.shieldDamage > 0 && damage.hullDamage === 0
+  player.hitCooldown = cooldown
+  state.shake = Math.min(13, state.shake + 6)
+  createHitEffect(
+    player.x,
+    player.y,
+    blockedByShield ? '#5acbff' : '#ff7446',
+    10,
+  )
+  addRing({
+    x: player.x,
+    y: player.y,
+    radius: player.radius,
+    maxRadius: player.radius * 2.25,
+    life: 0.28,
+    maxLife: 0.28,
+    color: blockedByShield ? '#5acbff' : '#ff643d',
+  }, true)
+  updateHud()
+  if (player.health <= 0) endGame()
+  return true
+}
+
+function dropTitanMine(boss) {
+  if (state.bossMines.length >= getEntityCap('bossMines')) return
+  const behindX = -Math.cos(boss.angle)
+  const behindY = -Math.sin(boss.angle)
+  const sideX = -behindY
+  const sideY = behindX
+  const offset = (Math.random() - 0.5) * boss.radius
+  state.bossMines.push({
+    x: Math.max(
+      18,
+      Math.min(width - 18, boss.x + behindX * boss.radius * 0.7 + sideX * offset),
+    ),
+    y: Math.max(
+      18,
+      Math.min(height - 18, boss.y + behindY * boss.radius * 0.7 + sideY * offset),
+    ),
+    radius: 17,
+    phase: Math.random() * TAU,
+    life: 7.5,
+    maxLife: 7.5,
+  })
+}
+
+function fireTitanScrapBurst(boss) {
+  const available =
+    getEntityCap('bossProjectiles') - state.bossProjectiles.length
+  const desiredCount = entityCaps.bossProjectiles <= 24 ? 7 : 9
+  const projectileCount = Math.min(desiredCount, available)
+  if (projectileCount <= 0) return
+
+  const offset = boss.phase * 0.23
+  for (let index = 0; index < projectileCount; index += 1) {
+    const angle = offset + (index / projectileCount) * TAU
+    const speed = 105 + (index % 2) * 12
+    state.bossProjectiles.push({
+      x: boss.x + Math.cos(angle) * boss.radius * 0.72,
+      y: boss.y + Math.sin(angle) * boss.radius * 0.72,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      radius: 6,
+      phase: angle,
+      life: 5.8,
+    })
+  }
+}
+
+function updateTitanHazards(dt) {
+  const player = state.player
+  const mines = state.bossMines
+  let mineWriteIndex = 0
+  for (let index = 0; index < mines.length; index += 1) {
+    const mine = mines[index]
+    mine.life -= dt
+    mine.phase += dt * 4.2
+    if (mine.life <= 0) continue
+
+    const dx = player.x - mine.x
+    const dy = player.y - mine.y
+    const collisionDistance = player.radius + mine.radius
+    if (dx * dx + dy * dy <= collisionDistance * collisionDistance) {
+      damagePlayerFromTitan(14, 0.78)
+      createHitEffect(mine.x, mine.y, '#ff743d', 8)
+      addRing({
+        x: mine.x,
+        y: mine.y,
+        radius: mine.radius,
+        maxRadius: mine.radius * 2.5,
+        life: 0.3,
+        maxLife: 0.3,
+        color: '#ff8b43',
+      })
+      continue
+    }
+    mines[mineWriteIndex] = mine
+    mineWriteIndex += 1
+  }
+  mines.length = mineWriteIndex
+  trimOldestInPlace(mines, getEntityCap('bossMines'))
+
+  const projectiles = state.bossProjectiles
+  let projectileWriteIndex = 0
+  for (let index = 0; index < projectiles.length; index += 1) {
+    const projectile = projectiles[index]
+    projectile.x += projectile.vx * dt
+    projectile.y += projectile.vy * dt
+    projectile.phase += dt * 4.5
+    projectile.life -= dt
+    if (
+      projectile.life <= 0 ||
+      projectile.x < -32 ||
+      projectile.x > width + 32 ||
+      projectile.y < -32 ||
+      projectile.y > height + 32
+    ) {
+      continue
+    }
+
+    const dx = player.x - projectile.x
+    const dy = player.y - projectile.y
+    const collisionDistance = player.radius + projectile.radius
+    if (dx * dx + dy * dy <= collisionDistance * collisionDistance) {
+      damagePlayerFromTitan(9, 0.6)
+      continue
+    }
+    projectiles[projectileWriteIndex] = projectile
+    projectileWriteIndex += 1
+  }
+  projectiles.length = projectileWriteIndex
+  trimOldestInPlace(projectiles, getEntityCap('bossProjectiles'))
+}
+
+function updateTitanEncounter(dt) {
+  state.titan.warningTime = Math.max(0, state.titan.warningTime - dt)
+  if (state.titan.status === 'pending') {
+    state.titan.spawnTimer -= dt
+    if (state.titan.spawnTimer <= 0) spawnHarvesterTitan()
+  }
+  if (state.titan.status !== 'active' || !state.titan.boss) return
+
+  const boss = state.titan.boss
+  const player = state.player
+  boss.phase += dt * 2.2
+  boss.flash = Math.max(0, boss.flash - dt)
+
+  let dx = player.x - boss.x
+  let dy = player.y - boss.y
+  let distance = Math.hypot(dx, dy) || 1
+  const directionX = dx / distance
+  const directionY = dy / distance
+  boss.angle = Math.atan2(directionY, directionX)
+  const approachScale =
+    distance > 125 ? 1 : Math.max(0, (distance - 88) / 37)
+  boss.vx = directionX * boss.speed * approachScale
+  boss.vy = directionY * boss.speed * approachScale
+  boss.x += boss.vx * dt
+  boss.y += boss.vy * dt
+  boss.x = Math.max(-boss.radius * 0.5, Math.min(width + boss.radius * 0.5, boss.x))
+  boss.y = Math.max(-boss.radius * 0.5, Math.min(height + boss.radius * 0.5, boss.y))
+
+  dx = player.x - boss.x
+  dy = player.y - boss.y
+  const distanceSquared = dx * dx + dy * dy
+  const collisionDistance = player.radius + boss.radius * 0.78
+  if (distanceSquared < collisionDistance * collisionDistance) {
+    distance = Math.sqrt(distanceSquared) || 1
+    const overlap = collisionDistance - distance
+    boss.x -= (dx / distance) * overlap * 0.62
+    boss.y -= (dy / distance) * overlap * 0.62
+    damagePlayerFromTitan(boss.damage, 0.92)
+  }
+
+  boss.mineClock -= dt
+  if (boss.mineClock <= 0) {
+    dropTitanMine(boss)
+    boss.mineClock = 4.35 + Math.random() * 0.8
+  }
+
+  boss.burstClock -= dt
+  if (boss.burstClock <= 0) {
+    fireTitanScrapBurst(boss)
+    boss.burstClock = 6.2 + Math.random() * 1.1
+  }
+
+  boss.pullClock -= dt
+  if (boss.pullWarning > 0) {
+    boss.pullWarning -= dt
+    if (boss.pullWarning <= 0) boss.pullActive = 1.55
+  } else if (boss.pullActive > 0) {
+    boss.pullActive -= dt
+    const pullRadius = 215
+    const pullDx = boss.x - player.x
+    const pullDy = boss.y - player.y
+    const pullDistanceSquared = pullDx * pullDx + pullDy * pullDy
+    if (
+      pullDistanceSquared < pullRadius * pullRadius &&
+      pullDistanceSquared > 72 * 72
+    ) {
+      const pullDistance = Math.sqrt(pullDistanceSquared) || 1
+      const pullStrength =
+        18 + (1 - Math.min(1, pullDistance / pullRadius)) * 18
+      player.x += (pullDx / pullDistance) * pullStrength * dt
+      player.y += (pullDy / pullDistance) * pullStrength * dt
+      player.x = Math.max(
+        player.radius + 8,
+        Math.min(width - player.radius - 8, player.x),
+      )
+      player.y = Math.max(
+        player.radius + 8,
+        Math.min(height - player.radius - 8, player.y),
+      )
+    }
+  } else if (boss.pullClock <= 0) {
+    boss.pullWarning = 0.9
+    boss.pullClock = 10.2
+  }
+
+  updateTitanHazards(dt)
 }
 
 function getMovementVector() {
@@ -1459,6 +1949,25 @@ function findNearestEnemy() {
     if (score < bestScore) {
       bestScore = score
       bestEnemy = enemy
+    }
+  }
+
+  const boss =
+    state.titan.status === 'active' ? state.titan.boss : null
+  if (boss && !boss.dead) {
+    const dx = boss.x - player.x
+    const dy = boss.y - player.y
+    const distance = Math.hypot(dx, dy)
+    const onScreen =
+      boss.x > -boss.radius &&
+      boss.x < width + boss.radius &&
+      boss.y > -boss.radius &&
+      boss.y < height + boss.radius
+    let score = distance / 120 + (onScreen ? 0 : 0.8)
+    if (distance < 300) score *= 0.58
+    if (boss.id === state.targetId) score *= 0.9
+    if (score < bestScore) {
+      bestEnemy = boss
     }
   }
 
@@ -2235,6 +2744,24 @@ function updateOrbitDrones(dt) {
       break
     }
   }
+
+  const boss =
+    state.titan.status === 'active' ? state.titan.boss : null
+  if (!boss || boss.dead) return
+  boss.orbitCooldown = Math.max(0, boss.orbitCooldown - dt)
+  if (boss.orbitCooldown > 0) return
+
+  for (const drone of orbit.positions) {
+    const dx = drone.x - boss.x
+    const dy = drone.y - boss.y
+    const collisionDistance = orbit.droneRadius + boss.radius * 0.82
+    if (dx * dx + dy * dy > collisionDistance * collisionDistance) continue
+    const surgeMultiplier = isReactorSurging() ? 1.35 : 1
+    applyTitanDamage(orbit.damage * surgeMultiplier)
+    boss.orbitCooldown = orbit.hitInterval
+    createHitEffect(drone.x, drone.y, '#79f7ff', 3)
+    break
+  }
 }
 
 function triggerEmpBurst() {
@@ -2271,6 +2798,19 @@ function triggerEmpBurst() {
     // The EMP ring is the entire effect. Large multi-kills must not allocate a
     // particle-and-ring burst for every enemy inside the pulse.
     if (enemy.health <= 0) destroyEnemy(enemy, true)
+  }
+
+  const boss =
+    state.titan.status === 'active' ? state.titan.boss : null
+  if (boss && !boss.dead) {
+    const dx = boss.x - player.x
+    const dy = boss.y - player.y
+    const hitRadius = emp.radius + boss.radius * 0.6
+    if (dx * dx + dy * dy <= hitRadius * hitRadius) {
+      const surgeMultiplier = isReactorSurging() ? 1.35 : 1
+      applyTitanDamage(emp.damage * surgeMultiplier)
+      createHitEffect(boss.x, boss.y, '#77f5ff', 5)
+    }
   }
   state.shake = Math.min(13, state.shake + 1.5)
 }
@@ -2418,7 +2958,41 @@ function updateBullets(dt) {
       continue
     }
 
-    for (let enemyIndex = 0; enemyIndex < enemies.length; enemyIndex += 1) {
+    const boss =
+      state.titan.status === 'active' ? state.titan.boss : null
+    if (boss && !boss.dead) {
+      const dx = bullet.x - boss.x
+      const dy = bullet.y - boss.y
+      const collisionDistance = bullet.radius + boss.radius * 0.84
+      if (
+        Math.abs(dx) <= collisionDistance &&
+        Math.abs(dy) <= collisionDistance &&
+        dx * dx + dy * dy <= collisionDistance * collisionDistance
+      ) {
+        applyTitanDamage(bullet.damage)
+        bullet.life = 0
+        createHitEffect(
+          bullet.x,
+          bullet.y,
+          '#ffd077',
+          bullet.surged ? 2 : 5,
+        )
+        createFloatingText(
+          Math.round(bullet.damage),
+          boss.x + (Math.random() - 0.5) * 18,
+          boss.y - boss.radius * 0.72,
+          '#ffe1a1',
+          0.58,
+          10,
+        )
+      }
+    }
+
+    for (
+      let enemyIndex = 0;
+      bullet.life > 0 && enemyIndex < enemies.length;
+      enemyIndex += 1
+    ) {
       const enemy = enemies[enemyIndex]
       if (enemy.dead) continue
       const dx = bullet.x - enemy.x
@@ -2534,6 +3108,25 @@ function updateEffects(dt) {
   const particleCap = getVisualEffectCap('particles')
   trimOldestInPlace(particles, particleCap)
 
+  const bossEffects = state.bossEffects
+  let bossEffectWriteIndex = 0
+  const bossEffectDamping = Math.pow(0.16, dt)
+  for (let index = 0; index < bossEffects.length; index += 1) {
+    const effect = bossEffects[index]
+    effect.x += effect.vx * dt
+    effect.y += effect.vy * dt
+    effect.vx *= bossEffectDamping
+    effect.vy *= bossEffectDamping
+    effect.rotation += effect.spin * dt
+    effect.life -= dt * (reducedEffects ? 1.25 : 1)
+    if (effect.life > 0) {
+      bossEffects[bossEffectWriteIndex] = effect
+      bossEffectWriteIndex += 1
+    }
+  }
+  bossEffects.length = bossEffectWriteIndex
+  trimOldestInPlace(bossEffects, getEntityCap('bossEffects'))
+
   const rings = state.rings
   let ringWriteIndex = 0
   for (let index = 0; index < rings.length; index += 1) {
@@ -2586,6 +3179,8 @@ function update(dt, wallDt = dt) {
   if (state.introClock <= 0) ui.onboardingHint.classList.add('is-hidden')
   state.hudClock -= wallDt
   updatePlayer(dt)
+  updateTitanEncounter(dt)
+  if (state.mode !== 'running') return
   updateSpawning(dt)
   updateShooting(dt)
   updateEnemies(dt)
@@ -2821,6 +3416,187 @@ function drawReactorPickup(pickup) {
   ctx.beginPath()
   ctx.arc(0, 0, 2, 0, TAU)
   ctx.fill()
+}
+
+function drawTitanMines() {
+  for (const mine of state.bossMines) {
+    if (mine.life < 1.2 && Math.floor(mine.life * 10) % 2 === 0) continue
+    const pulse = (Math.sin(mine.phase) + 1) * 0.5
+    ctx.save()
+    ctx.translate(mine.x, mine.y)
+    ctx.globalAlpha = 0.18 + pulse * 0.13
+    ctx.fillStyle = '#ff5f32'
+    ctx.beginPath()
+    ctx.arc(0, 0, mine.radius + 6 + pulse * 3, 0, TAU)
+    ctx.fill()
+    ctx.globalAlpha = 1
+    ctx.fillStyle = '#321815'
+    ctx.strokeStyle = '#ff7b3f'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(0, 0, mine.radius, 0, TAU)
+    ctx.fill()
+    ctx.stroke()
+    ctx.strokeStyle = '#a83f29'
+    ctx.lineWidth = 3
+    for (let index = 0; index < 4; index += 1) {
+      const angle = index * (TAU / 4) + mine.phase * 0.12
+      ctx.beginPath()
+      ctx.moveTo(Math.cos(angle) * 7, Math.sin(angle) * 7)
+      ctx.lineTo(Math.cos(angle) * 14, Math.sin(angle) * 14)
+      ctx.stroke()
+    }
+    ctx.shadowColor = '#ff9a42'
+    ctx.shadowBlur = reducedEffects ? 0 : 10
+    ctx.fillStyle = pulse > 0.45 ? '#ffc15a' : '#ff6339'
+    ctx.beginPath()
+    ctx.arc(0, 0, 5 + pulse * 2, 0, TAU)
+    ctx.fill()
+    ctx.restore()
+  }
+}
+
+function drawTitanProjectiles() {
+  for (const projectile of state.bossProjectiles) {
+    ctx.save()
+    ctx.translate(projectile.x, projectile.y)
+    ctx.rotate(projectile.phase)
+    ctx.shadowColor = '#ff9e44'
+    ctx.shadowBlur = reducedEffects ? 0 : 8
+    ctx.fillStyle = '#ffc361'
+    ctx.strokeStyle = '#ff7439'
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.moveTo(projectile.radius + 2, 0)
+    ctx.lineTo(0, projectile.radius)
+    ctx.lineTo(-projectile.radius - 2, 0)
+    ctx.lineTo(0, -projectile.radius)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    ctx.restore()
+  }
+}
+
+function drawHarvesterTitan() {
+  if (state.titan.status !== 'active' || !state.titan.boss) return
+  const boss = state.titan.boss
+  const radius = boss.radius
+  const corePulse = (Math.sin(boss.phase * 2.3) + 1) * 0.5
+
+  if (boss.pullWarning > 0 || boss.pullActive > 0) {
+    const active = boss.pullActive > 0
+    const warningProgress = 1 - Math.max(0, boss.pullWarning) / 0.9
+    const fieldRadius = active
+      ? 215 + Math.sin(boss.phase * 4) * 4
+      : 155 + warningProgress * 60
+    ctx.save()
+    ctx.globalAlpha = active ? 0.22 : 0.12 + warningProgress * 0.13
+    ctx.strokeStyle = active ? '#ff9c55' : '#ffbd72'
+    ctx.lineWidth = active ? 2 : 1.5
+    ctx.beginPath()
+    ctx.arc(boss.x, boss.y, fieldRadius, 0, TAU)
+    ctx.stroke()
+    if (active && !reducedEffects) {
+      ctx.globalAlpha = 0.1
+      ctx.beginPath()
+      ctx.arc(boss.x, boss.y, fieldRadius * 0.66, 0, TAU)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
+  ctx.save()
+  ctx.translate(boss.x, boss.y)
+  ctx.rotate(boss.angle)
+
+  if (!reducedEffects) {
+    ctx.globalAlpha = 0.12 + corePulse * 0.08
+    ctx.fillStyle = '#ff6238'
+    ctx.beginPath()
+    ctx.arc(0, 0, radius * 1.22, 0, TAU)
+    ctx.fill()
+    ctx.globalAlpha = 1
+  }
+
+  ctx.fillStyle = '#111719'
+  ctx.strokeStyle = boss.flash > 0 ? '#fff0c7' : '#793c2c'
+  ctx.lineWidth = boss.flash > 0 ? 3 : 2
+  ctx.fillRect(-radius * 0.72, -radius * 0.8, radius * 1.14, radius * 0.3)
+  ctx.strokeRect(-radius * 0.72, -radius * 0.8, radius * 1.14, radius * 0.3)
+  ctx.fillRect(-radius * 0.72, radius * 0.5, radius * 1.14, radius * 0.3)
+  ctx.strokeRect(-radius * 0.72, radius * 0.5, radius * 1.14, radius * 0.3)
+
+  ctx.fillStyle = boss.flash > 0 ? '#f6e4c5' : '#24292a'
+  ctx.strokeStyle = boss.flash > 0 ? '#fff4d8' : '#b24a30'
+  ctx.beginPath()
+  ctx.moveTo(radius * 0.76, 0)
+  ctx.lineTo(radius * 0.32, radius * 0.58)
+  ctx.lineTo(-radius * 0.58, radius * 0.52)
+  ctx.lineTo(-radius * 0.82, radius * 0.22)
+  ctx.lineTo(-radius * 0.82, -radius * 0.22)
+  ctx.lineTo(-radius * 0.58, -radius * 0.52)
+  ctx.lineTo(radius * 0.32, -radius * 0.58)
+  ctx.closePath()
+  ctx.fill()
+  ctx.stroke()
+
+  // Forward salvage claws keep the silhouette readable even with reduced FX.
+  ctx.strokeStyle = boss.flash > 0 ? '#fff1cc' : '#bf5737'
+  ctx.lineWidth = Math.max(3, radius * 0.08)
+  for (const side of [-1, 1]) {
+    ctx.beginPath()
+    ctx.moveTo(radius * 0.35, side * radius * 0.38)
+    ctx.lineTo(radius * 0.82, side * radius * 0.64)
+    ctx.lineTo(radius * 1.08, side * radius * 0.48)
+    ctx.stroke()
+    ctx.lineWidth = Math.max(2, radius * 0.055)
+    ctx.beginPath()
+    ctx.moveTo(radius * 1.08, side * radius * 0.48)
+    ctx.lineTo(radius * 0.98, side * radius * 0.28)
+    ctx.moveTo(radius * 1.08, side * radius * 0.48)
+    ctx.lineTo(radius * 0.86, side * radius * 0.58)
+    ctx.stroke()
+    ctx.lineWidth = Math.max(3, radius * 0.08)
+  }
+
+  ctx.fillStyle = '#0d1112'
+  ctx.strokeStyle = '#5f3027'
+  ctx.lineWidth = 2
+  ctx.fillRect(-radius * 0.58, -radius * 0.3, radius * 0.48, radius * 0.6)
+  ctx.strokeRect(-radius * 0.58, -radius * 0.3, radius * 0.48, radius * 0.6)
+  ctx.fillStyle = '#89321f'
+  ctx.fillRect(radius * 0.27, -radius * 0.31, radius * 0.2, radius * 0.62)
+
+  ctx.shadowColor = '#ff5f32'
+  ctx.shadowBlur = reducedEffects ? 5 : 18
+  ctx.fillStyle = '#ff6938'
+  ctx.beginPath()
+  ctx.arc(0, 0, radius * 0.22 + corePulse * 2, 0, TAU)
+  ctx.fill()
+  ctx.fillStyle = '#ffd05d'
+  ctx.beginPath()
+  ctx.arc(0, 0, radius * 0.09 + corePulse, 0, TAU)
+  ctx.fill()
+  ctx.shadowBlur = 0
+  ctx.restore()
+}
+
+function drawTitanEffects() {
+  for (const effect of state.bossEffects) {
+    ctx.save()
+    ctx.translate(effect.x, effect.y)
+    ctx.rotate(effect.rotation)
+    ctx.globalAlpha = Math.max(0, effect.life / effect.maxLife)
+    ctx.fillStyle = effect.color
+    ctx.fillRect(
+      -effect.size * 0.5,
+      -effect.size * 0.35,
+      effect.size,
+      effect.size * 0.7,
+    )
+    ctx.restore()
+  }
 }
 
 function drawEnemyHealthBar(enemy, healthRatio) {
@@ -3302,12 +4078,16 @@ function render() {
   const shakeY = state.shake ? (Math.random() - 0.5) * state.shake : 0
   ctx.translate(shakeX, shakeY)
   state.pickups.forEach(drawPickup)
+  drawTitanMines()
   state.enemies.forEach(drawEnemy)
+  drawHarvesterTitan()
+  drawTitanProjectiles()
   drawBullets()
   drawOrbitDrones()
   drawExtractionBeacon()
   drawPlayer()
   drawSurgePulse()
+  drawTitanEffects()
   drawEffects()
   drawTouchControl()
   ctx.restore()
