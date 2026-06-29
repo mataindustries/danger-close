@@ -464,6 +464,11 @@ button {
   text-transform: uppercase;
 }
 
+.mission-heading span b {
+  color: #91ccca;
+  font-weight: 600;
+}
+
 .mission-heading strong {
   color: #c9f5f3;
   font-family: var(--font-display);
@@ -939,6 +944,221 @@ button {
   letter-spacing: 0.09em;
 }
 
+.sector-panel {
+  width: min(1080px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: clamp(20px, 3vw, 34px);
+}
+
+.sector-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.sector-heading p {
+  margin: 8px 0 0;
+  color: #789194;
+  font-size: 0.68rem;
+}
+
+.sector-heading > button {
+  min-width: 110px;
+}
+
+.sector-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.sector-card {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 410px;
+  flex-direction: column;
+  padding: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(103, 203, 207, 0.18);
+  background: rgba(7, 16, 18, 0.86);
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease;
+}
+
+.sector-card:hover {
+  border-color: rgba(112, 237, 244, 0.38);
+}
+
+.sector-card.is-selected {
+  border-color: rgba(112, 237, 244, 0.58);
+  background: rgba(11, 25, 27, 0.94);
+}
+
+.sector-card-visual {
+  position: relative;
+  height: 76px;
+  margin: -14px -14px 15px;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(133, 213, 215, 0.16);
+}
+
+.sector-card-visual::before,
+.sector-card-visual::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+}
+
+.sector-card-visual::before {
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      transparent 0,
+      transparent 36px,
+      rgba(255, 255, 255, 0.035) 37px
+    ),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.04), transparent 55%);
+}
+
+.sector-card-visual::after {
+  right: 16px;
+  bottom: -17px;
+  width: 95px;
+  height: 46px;
+  border: 1px solid rgba(226, 244, 244, 0.16);
+  background: rgba(3, 8, 9, 0.48);
+  transform: skewX(-24deg);
+}
+
+.sector-card[data-sector='rust-basin'] .sector-card-visual {
+  background:
+    radial-gradient(circle at 25% 35%, rgba(218, 128, 64, 0.24), transparent 25%),
+    linear-gradient(145deg, #2a251e, #101616);
+}
+
+.sector-card[data-sector='battery-graveyard'] .sector-card-visual {
+  background:
+    radial-gradient(circle at 68% 28%, rgba(79, 198, 255, 0.35), transparent 26%),
+    linear-gradient(145deg, #16323e, #081319);
+}
+
+.sector-card[data-sector='reactor-dead-zone'] .sector-card-visual {
+  background:
+    radial-gradient(circle at 34% 42%, rgba(215, 198, 78, 0.3), transparent 27%),
+    linear-gradient(145deg, #332b16, #130d0b);
+}
+
+.sector-card-visual > span {
+  position: absolute;
+  z-index: 1;
+  top: 11px;
+  left: 13px;
+  color: rgba(227, 246, 246, 0.65);
+  font-size: 0.5rem;
+  letter-spacing: 0.15em;
+}
+
+.sector-card-visual > i {
+  position: absolute;
+  z-index: 1;
+  bottom: 13px;
+  left: 13px;
+  width: 46px;
+  height: 2px;
+  background: var(--cyan);
+  box-shadow: 0 0 10px rgba(112, 237, 244, 0.5);
+}
+
+.sector-card[data-sector='rust-basin'] .sector-card-visual > i {
+  background: #d88a4b;
+}
+
+.sector-card[data-sector='battery-graveyard'] .sector-card-visual > i {
+  background: #55c8ff;
+}
+
+.sector-card[data-sector='reactor-dead-zone'] .sector-card-visual > i {
+  background: #d7c64e;
+}
+
+.sector-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 9px;
+}
+
+.sector-card-heading span {
+  display: block;
+  margin-bottom: 4px;
+  color: #547174;
+  font-size: 0.44rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.sector-card-heading h3 {
+  margin: 0;
+  color: #e2f8f7;
+  font-family: var(--font-display);
+  font-size: 1.02rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.sector-card-heading b {
+  padding: 4px 6px;
+  color: #d8aa72;
+  border: 1px solid rgba(211, 151, 86, 0.26);
+  font-size: 0.45rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.sector-card > p {
+  min-height: 48px;
+  margin: 10px 0 12px;
+  color: #769093;
+  font-size: 0.62rem;
+  line-height: 1.5;
+}
+
+.sector-card ul {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 17px;
+  padding: 0;
+  color: #91aaab;
+  font-size: 0.56rem;
+  line-height: 1.35;
+  list-style: none;
+}
+
+.sector-card li {
+  position: relative;
+  padding-left: 13px;
+}
+
+.sector-card li::before {
+  content: '+';
+  position: absolute;
+  left: 0;
+  color: #63bfc3;
+}
+
+.sector-start-button {
+  width: 100%;
+  margin-top: auto;
+}
+
 .profile-wallet {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1232,25 +1452,35 @@ button {
   border-top: 1px solid rgba(106, 193, 197, 0.15);
 }
 
-.titan-summary {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
+.mission-outcome-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   margin: -10px 0 18px;
-  padding: 10px 12px;
   border: 1px solid rgba(255, 116, 61, 0.2);
   background: rgba(45, 19, 10, 0.24);
 }
 
-.titan-summary span {
+.mission-outcome-summary > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border-right: 1px solid rgba(255, 116, 61, 0.16);
+}
+
+.mission-outcome-summary > div:last-child {
+  border-right: 0;
+}
+
+.mission-outcome-summary span {
+  display: block;
+  margin-bottom: 4px;
   color: #956047;
   font-size: 0.5rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
-.titan-summary strong {
+.mission-outcome-summary strong {
+  display: block;
   color: #ffc17e;
   font-family: var(--font-display);
   font-size: 0.72rem;
@@ -1258,13 +1488,27 @@ button {
   text-transform: uppercase;
 }
 
-.titan-summary small {
+.mission-outcome-summary small {
+  display: block;
+  margin-top: 4px;
   color: #d99959;
   font-size: 0.5rem;
+  line-height: 1.35;
 }
 
-.titan-summary small[hidden] {
+.mission-outcome-summary small[hidden],
+.sector-summary-bonus[hidden] {
   display: none;
+}
+
+.modal-panel > .sector-summary-bonus {
+  margin: -10px 0 18px;
+  padding: 8px 11px;
+  color: #bd9259;
+  border-left: 2px solid #c3944b;
+  background: rgba(73, 47, 15, 0.28);
+  font-size: 0.54rem;
+  letter-spacing: 0.04em;
 }
 
 .reward-panel {
@@ -1747,6 +1991,34 @@ button {
     margin: 22px 0 20px;
   }
 
+  .sector-panel {
+    max-height: calc(100dvh - 82px);
+    padding: 20px 16px;
+  }
+
+  .sector-heading {
+    display: block;
+  }
+
+  .sector-heading > button {
+    width: 100%;
+    margin-top: 14px;
+  }
+
+  .sector-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    margin-top: 16px;
+  }
+
+  .sector-card {
+    min-height: 380px;
+  }
+
+  .sector-card > p {
+    min-height: 0;
+  }
+
   .hangar-panel {
     max-height: calc(100dvh - 82px);
   }
@@ -1808,14 +2080,18 @@ button {
     gap: 10px;
   }
 
-  .titan-summary {
-    flex-wrap: wrap;
-    gap: 5px 9px;
+  .mission-outcome-summary {
+    grid-template-columns: 1fr;
     margin-top: -8px;
   }
 
-  .titan-summary small {
-    flex-basis: 100%;
+  .mission-outcome-summary > div {
+    border-top: 1px solid rgba(255, 116, 61, 0.16);
+    border-right: 0;
+  }
+
+  .mission-outcome-summary > div:first-child {
+    border-top: 0;
   }
 
   .upgrade-grid {

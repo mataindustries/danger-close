@@ -9,7 +9,7 @@ app.innerHTML = `
         <span class="brand-mark" aria-hidden="true"></span>
         <div>
           <h1>Danger Close</h1>
-          <p>Dead Zone // Sector 07</p>
+          <p id="brand-sector">Dead Zone // Rust Basin</p>
         </div>
       </div>
       <div class="mission-status">
@@ -56,7 +56,7 @@ app.innerHTML = `
 
       <div id="mission-panel" class="mission-panel" aria-live="polite">
         <div class="mission-heading">
-          <span>Mission objective</span>
+          <span>Mission // <b id="hud-sector-name">Rust Basin</b></span>
           <strong id="mission-status">Collecting salvage</strong>
         </div>
         <p id="mission-copy">Collect salvage to call extraction</p>
@@ -127,7 +127,7 @@ app.innerHTML = `
 
       <div id="main-menu" class="modal-overlay front-screen">
         <div class="modal-panel menu-panel" role="dialog" aria-modal="true" aria-labelledby="menu-title">
-          <span class="modal-kicker">Salvage command // Sector 07</span>
+          <span class="modal-kicker">Salvage command // Dead zone network</span>
           <h2 id="menu-title">Danger Close</h2>
           <p>Deploy. Recover dead-zone hardware. Extract before the swarm closes in.</p>
           <div class="profile-wallet" aria-label="Saved resources">
@@ -136,11 +136,25 @@ app.innerHTML = `
             <div><span>Reactor fragments</span><strong id="menu-reactor">0</strong></div>
           </div>
           <div class="screen-actions">
-            <button id="menu-start-button" class="primary-action" type="button">Start run</button>
+            <button id="menu-start-button" class="primary-action" type="button">Select Sector / Start Mission</button>
             <button id="menu-hangar-button" class="secondary-action" type="button">Hangar upgrades</button>
             <button id="reset-save-button" class="danger-action" type="button">Reset save</button>
           </div>
           <p id="reset-save-status" class="screen-status" aria-live="polite"></p>
+        </div>
+      </div>
+
+      <div id="sector-select" class="modal-overlay front-screen" hidden>
+        <div class="modal-panel sector-panel" role="dialog" aria-modal="true" aria-labelledby="sector-title">
+          <div class="sector-heading">
+            <div>
+              <span class="modal-kicker">Mission routing // Dead zones</span>
+              <h2 id="sector-title">Select sector</h2>
+              <p>Choose the salvage conditions for this deployment.</p>
+            </div>
+            <button id="sector-back-button" class="secondary-action" type="button">Back</button>
+          </div>
+          <div id="sector-options" class="sector-grid" role="list"></div>
         </div>
       </div>
 
@@ -161,7 +175,7 @@ app.innerHTML = `
           <div id="hangar-upgrades" class="hangar-grid"></div>
           <div class="hangar-actions">
             <button id="hangar-back-button" class="secondary-action" type="button">Main menu</button>
-            <button id="hangar-start-button" class="primary-action" type="button">Start run</button>
+            <button id="hangar-start-button" class="primary-action" type="button">Select sector</button>
           </div>
         </div>
       </div>
@@ -179,11 +193,22 @@ app.innerHTML = `
             <div><span>GPUs collected</span><strong id="summary-gpus">0</strong></div>
             <div><span>Reactor cores</span><strong id="summary-reactors">0</strong></div>
           </div>
-          <div class="titan-summary">
-            <span>Harvester Titan</span>
-            <strong id="summary-titan">Avoided</strong>
-            <small id="summary-titan-bonus" hidden>Titan destroyed bonus</small>
+          <div class="mission-outcome-summary">
+            <div>
+              <span>Sector</span>
+              <strong id="summary-sector">Rust Basin</strong>
+            </div>
+            <div>
+              <span>Result</span>
+              <strong id="summary-result">Extracted</strong>
+            </div>
+            <div>
+              <span>Harvester Titan</span>
+              <strong id="summary-titan">Avoided</strong>
+              <small id="summary-titan-bonus" hidden>Titan destroyed bonus</small>
+            </div>
           </div>
+          <p id="summary-sector-bonus" class="sector-summary-bonus" hidden></p>
           <div class="reward-panel">
             <span>Permanent resources earned</span>
             <div>
@@ -195,7 +220,7 @@ app.innerHTML = `
           <div class="summary-actions">
             <button id="summary-hangar-button" class="secondary-action" type="button">Return to hangar</button>
             <button id="summary-restart-button" class="primary-action" type="button">
-              Start new run
+              Select next sector
               <small>Press Enter</small>
             </button>
           </div>
@@ -209,6 +234,7 @@ const canvas = document.querySelector('#game-canvas')
 const ctx = canvas.getContext('2d')
 
 const ui = {
+  brandSector: document.querySelector('#brand-sector'),
   healthPanel: document.querySelector('.health-panel'),
   healthText: document.querySelector('#health-text'),
   healthBar: document.querySelector('#health-bar'),
@@ -223,6 +249,7 @@ const ui = {
   speed: document.querySelector('#speed-stat'),
   missionPanel: document.querySelector('#mission-panel'),
   missionStatus: document.querySelector('#mission-status'),
+  hudSectorName: document.querySelector('#hud-sector-name'),
   missionCopy: document.querySelector('#mission-copy'),
   missionProgress: document.querySelector('#mission-progress-bar'),
   missionSalvage: document.querySelector('#mission-salvage'),
@@ -248,6 +275,9 @@ const ui = {
   menuHangarButton: document.querySelector('#menu-hangar-button'),
   resetSaveButton: document.querySelector('#reset-save-button'),
   resetSaveStatus: document.querySelector('#reset-save-status'),
+  sectorSelect: document.querySelector('#sector-select'),
+  sectorOptions: document.querySelector('#sector-options'),
+  sectorBackButton: document.querySelector('#sector-back-button'),
   hangar: document.querySelector('#hangar'),
   hangarScrap: document.querySelector('#hangar-scrap'),
   hangarGpu: document.querySelector('#hangar-gpu'),
@@ -265,6 +295,9 @@ const ui = {
   summaryScrap: document.querySelector('#summary-scrap'),
   summaryGpus: document.querySelector('#summary-gpus'),
   summaryReactors: document.querySelector('#summary-reactors'),
+  summarySector: document.querySelector('#summary-sector'),
+  summaryResult: document.querySelector('#summary-result'),
+  summarySectorBonus: document.querySelector('#summary-sector-bonus'),
   summaryTitan: document.querySelector('#summary-titan'),
   summaryTitanBonus: document.querySelector('#summary-titan-bonus'),
   rewardScrap: document.querySelector('#reward-scrap'),
@@ -302,6 +335,7 @@ let state
 let backgroundMarks = []
 let ambientDust = []
 let ambientGlows = []
+let sectorArcs = []
 const backgroundLayer = document.createElement('canvas')
 const vignetteLayer = document.createElement('canvas')
 let reducedEffects = false
@@ -393,6 +427,134 @@ const SURGE_MIN_FIRE_INTERVAL = 0.18
 const SURGE_SPAWN_INTERVAL_MULTIPLIER = 0.94
 const PICKUP_LIFETIME = 20
 let entityCaps = DESKTOP_CAPS
+
+const sectors = [
+  {
+    id: 'rust-basin',
+    code: 'RB-01',
+    name: 'Rust Basin',
+    difficulty: 'Balanced',
+    description:
+      'A cracked industrial salvage field with predictable swarm pressure.',
+    modifiers: [
+      'Standard enemy pressure',
+      'Balanced salvage drops',
+      '220 salvage extraction target',
+      'Standard recovery rewards',
+    ],
+    gameplay: {
+      missionRequirementMultiplier: 1,
+      spawnIntervalMultiplier: 1,
+      enemyCapBonus: 0,
+      scoutChanceMultiplier: 1,
+      heavyChanceMultiplier: 1,
+      startingShieldBonus: 0,
+      surgeDurationBonus: 0,
+      dropMultipliers: {},
+      rewardBonus: { scrap: 0, gpu: 0, reactor: 0 },
+    },
+    visual: {
+      seed: 7307,
+      center: '#1c211e',
+      middle: '#121817',
+      edge: '#090c0c',
+      gridRgb: '113, 112, 89',
+      markRgb: '178, 132, 83',
+      debrisRgb: '130, 104, 75',
+      dustColor: '#c7a675',
+      glowRgb: '177, 105, 57',
+      effect: 'rust',
+      accent: '#d88a4b',
+    },
+  },
+  {
+    id: 'battery-graveyard',
+    code: 'BG-04',
+    name: 'Battery Graveyard',
+    difficulty: 'Charged',
+    description:
+      'An abandoned EV storage field lit by unstable cells and blue discharge.',
+    modifiers: [
+      'EV battery drops increased',
+      '+5 starting shield',
+      'Scout bots appear more often',
+      '238 salvage extraction target',
+      '+12 SCR on successful extraction',
+    ],
+    gameplay: {
+      missionRequirementMultiplier: 1.08,
+      spawnIntervalMultiplier: 1,
+      enemyCapBonus: 0,
+      scoutChanceMultiplier: 1.28,
+      heavyChanceMultiplier: 1,
+      startingShieldBonus: 5,
+      surgeDurationBonus: 0,
+      dropMultipliers: { battery: 2.2 },
+      rewardBonus: { scrap: 12, gpu: 0, reactor: 0 },
+    },
+    visual: {
+      seed: 12457,
+      center: '#132a33',
+      middle: '#0d1b22',
+      edge: '#070d11',
+      gridRgb: '74, 139, 166',
+      markRgb: '95, 142, 158',
+      debrisRgb: '73, 111, 126',
+      dustColor: '#8ab9c8',
+      glowRgb: '53, 167, 218',
+      effect: 'electric',
+      accent: '#55c8ff',
+    },
+  },
+  {
+    id: 'reactor-dead-zone',
+    code: 'RD-09',
+    name: 'Reactor Dead Zone',
+    difficulty: 'Hazardous',
+    description:
+      'A poisoned power sector where unstable cores feed an aggressive swarm.',
+    modifiers: [
+      'Reactor core drops increased',
+      'Reactor Surge lasts +2 seconds',
+      'Enemy pressure increased',
+      '211 salvage extraction target',
+      '+1 RCT on successful extraction',
+    ],
+    gameplay: {
+      missionRequirementMultiplier: 0.96,
+      spawnIntervalMultiplier: 0.91,
+      enemyCapBonus: 3,
+      scoutChanceMultiplier: 1,
+      heavyChanceMultiplier: 1.08,
+      startingShieldBonus: 0,
+      surgeDurationBonus: 2,
+      dropMultipliers: { reactor: 2.1 },
+      rewardBonus: { scrap: 0, gpu: 0, reactor: 1 },
+    },
+    visual: {
+      seed: 20873,
+      center: '#292716',
+      middle: '#19170f',
+      edge: '#0e0b09',
+      gridRgb: '151, 129, 62',
+      markRgb: '170, 105, 57',
+      debrisRgb: '126, 83, 47',
+      dustColor: '#c8b55d',
+      glowRgb: '197, 117, 38',
+      effect: 'radiation',
+      accent: '#d7c64e',
+    },
+  },
+]
+
+const sectorsById = Object.fromEntries(
+  sectors.map((sector) => [sector.id, sector]),
+)
+let selectedSectorId = sectors[0].id
+
+function getSector(sectorId = state?.sectorId || selectedSectorId) {
+  return sectorsById[sectorId] || sectors[0]
+}
 
 const hangarUpgrades = [
   {
@@ -562,8 +724,14 @@ const resourceTypes = {
 
 function createInitialState() {
   const permanent = getPermanentBonuses()
+  const sector = getSector(selectedSectorId)
+  const startingShield = Math.min(
+    30,
+    permanent.startingShield + sector.gameplay.startingShieldBonus,
+  )
   return {
     mode: 'running',
+    sectorId: sector.id,
     elapsed: 0,
     spawnClock: 0.16,
     fireClock: 0,
@@ -586,7 +754,8 @@ function createInitialState() {
     runFinalized: false,
     runSuccess: null,
     reactorSurge: 0,
-    reactorSurgeDuration: permanent.surgeDuration,
+    reactorSurgeDuration:
+      permanent.surgeDuration + sector.gameplay.surgeDurationBonus,
     reactorEnemyCap: 0,
     warningFlash: 0,
     fps: 60,
@@ -598,7 +767,10 @@ function createInitialState() {
     spawnBacklog: 0,
     mission: {
       salvage: 0,
-      required: MISSION_SALVAGE_REQUIRED,
+      required: Math.round(
+        MISSION_SALVAGE_REQUIRED *
+          sector.gameplay.missionRequirementMultiplier,
+      ),
       ready: false,
       extractionActive: false,
       extractionTime: EXTRACTION_DURATION,
@@ -618,9 +790,9 @@ function createInitialState() {
       radius: 19,
       health: permanent.maxHealth,
       maxHealth: permanent.maxHealth,
-      shield: permanent.startingShield,
+      shield: startingShield,
       maxShield: 30,
-      shieldDecayDelay: permanent.startingShield > 0 ? 18 : 0,
+      shieldDecayDelay: startingShield > 0 ? 18 : 0,
       speed: permanent.speed,
       damage: permanent.damage,
       magnetMultiplier: permanent.magnetMultiplier,
@@ -664,6 +836,7 @@ function createInitialState() {
 
 function hideFrontScreens() {
   ui.mainMenu.hidden = true
+  ui.sectorSelect.hidden = true
   ui.hangar.hidden = true
   ui.runSummary.hidden = true
 }
@@ -700,6 +873,75 @@ function showMainMenu() {
   lastFrame = performance.now()
 }
 
+function renderSectorSelect() {
+  ui.sectorOptions.innerHTML = sectors
+    .map((sector) => {
+      const selected = sector.id === selectedSectorId
+      return `
+        <article
+          class="sector-card${selected ? ' is-selected' : ''}"
+          data-sector="${sector.id}"
+          role="listitem"
+          aria-label="${sector.name}, ${sector.difficulty}"
+        >
+          <div class="sector-card-visual" aria-hidden="true">
+            <span>${sector.code}</span>
+            <i></i>
+          </div>
+          <div class="sector-card-heading">
+            <div>
+              <span>${selected ? 'Selected route' : 'Available route'}</span>
+              <h3>${sector.name}</h3>
+            </div>
+            <b>${sector.difficulty}</b>
+          </div>
+          <p>${sector.description}</p>
+          <ul>
+            ${sector.modifiers.map((modifier) => `<li>${modifier}</li>`).join('')}
+          </ul>
+          <button
+            class="primary-action sector-start-button"
+            type="button"
+            data-start-sector="${sector.id}"
+          >
+            Start mission
+          </button>
+        </article>
+      `
+    })
+    .join('')
+}
+
+function showSectorSelect() {
+  state = createInitialState()
+  state.mode = 'sector'
+  hideFrontScreens()
+  ui.levelUp.hidden = true
+  ui.sectorSelect.hidden = false
+  ui.onboardingHint.classList.add('is-hidden')
+  pointer.active = false
+  keys.clear()
+  renderSectorSelect()
+  createBackgroundMarks()
+  updateHud()
+  lastFrame = performance.now()
+}
+
+function startMission(sectorId) {
+  if (!sectorsById[sectorId]) return
+  selectedSectorId = sectorId
+  resetGame()
+}
+
+function previewSector(sectorId) {
+  if (!sectorsById[sectorId] || state.mode !== 'sector') return
+  selectedSectorId = sectorId
+  state.sectorId = sectorId
+  renderSectorSelect()
+  createBackgroundMarks()
+  updateHud()
+}
+
 function showHangar() {
   state = createInitialState()
   state.mode = 'hangar'
@@ -728,6 +970,7 @@ function resetGame() {
   pointer.active = false
   keys.clear()
   reducedEffects = false
+  createBackgroundMarks()
   updateHud()
   lastFrame = performance.now()
 }
@@ -759,8 +1002,11 @@ function createBackgroundMarks() {
   backgroundMarks = []
   ambientDust = []
   ambientGlows = []
+  sectorArcs = []
+  const sector = getSector()
+  const visual = sector.visual
   const count = Math.max(18, Math.round((width * height) / 28000))
-  let seed = 7307
+  let seed = visual.seed
   const random = () => {
     seed = (seed * 16807) % 2147483647
     return (seed - 1) / 2147483646
@@ -808,6 +1054,26 @@ function createBackgroundMarks() {
     })
   }
 
+  if (visual.effect === 'electric') {
+    const arcCount = width < 760 ? 3 : 4
+    for (let index = 0; index < arcCount; index += 1) {
+      const points = []
+      let x = random() * width
+      let y = random() * height
+      points.push({ x, y })
+      for (let segment = 0; segment < 5; segment += 1) {
+        x += 12 + random() * 20
+        y += (random() - 0.5) * 22
+        points.push({ x, y })
+      }
+      sectorArcs.push({
+        points,
+        phase: random() * TAU,
+        speed: 0.7 + random() * 0.55,
+      })
+    }
+  }
+
   rebuildBackgroundLayers()
 }
 
@@ -819,6 +1085,7 @@ function rebuildBackgroundLayers() {
   backgroundLayer.height = Math.round(height * layerDpr)
   vignetteLayer.width = backgroundLayer.width
   vignetteLayer.height = backgroundLayer.height
+  const visual = getSector().visual
 
   const backgroundContext = backgroundLayer.getContext('2d')
   backgroundContext.setTransform(layerDpr, 0, 0, layerDpr, 0, 0)
@@ -830,9 +1097,9 @@ function rebuildBackgroundLayers() {
     height * 0.5,
     Math.max(width, height) * 0.78,
   )
-  gradient.addColorStop(0, '#162124')
-  gradient.addColorStop(0.52, '#101719')
-  gradient.addColorStop(1, '#080d0f')
+  gradient.addColorStop(0, visual.center)
+  gradient.addColorStop(0.52, visual.middle)
+  gradient.addColorStop(1, visual.edge)
   backgroundContext.fillStyle = gradient
   backgroundContext.fillRect(0, 0, width, height)
 
@@ -841,8 +1108,8 @@ function rebuildBackgroundLayers() {
   for (let x = 0; x <= width; x += gridSize) {
     backgroundContext.strokeStyle =
       x % (gridSize * 4) === 0
-        ? 'rgba(82, 130, 127, 0.13)'
-        : 'rgba(73, 99, 98, 0.075)'
+        ? `rgba(${visual.gridRgb}, 0.13)`
+        : `rgba(${visual.gridRgb}, 0.07)`
     backgroundContext.beginPath()
     backgroundContext.moveTo(x, 0)
     backgroundContext.lineTo(x, height)
@@ -851,8 +1118,8 @@ function rebuildBackgroundLayers() {
   for (let y = 0; y <= height; y += gridSize) {
     backgroundContext.strokeStyle =
       y % (gridSize * 4) === 0
-        ? 'rgba(82, 130, 127, 0.13)'
-        : 'rgba(73, 99, 98, 0.075)'
+        ? `rgba(${visual.gridRgb}, 0.13)`
+        : `rgba(${visual.gridRgb}, 0.07)`
     backgroundContext.beginPath()
     backgroundContext.moveTo(0, y)
     backgroundContext.lineTo(width, y)
@@ -875,7 +1142,8 @@ function rebuildBackgroundLayers() {
       )
       backgroundContext.fill()
     }
-    backgroundContext.strokeStyle = `rgba(175, 154, 118, ${mark.opacity})`
+    backgroundContext.strokeStyle =
+      `rgba(${visual.markRgb}, ${mark.opacity})`
     backgroundContext.lineWidth = 1
     backgroundContext.beginPath()
     for (let index = 0; index < mark.points.length; index += 1) {
@@ -887,7 +1155,7 @@ function rebuildBackgroundLayers() {
     if (mark.debris) {
       const point = mark.points[0]
       backgroundContext.fillStyle =
-        `rgba(124, 113, 90, ${mark.opacity + 0.05})`
+        `rgba(${visual.debrisRgb}, ${mark.opacity + 0.05})`
       backgroundContext.fillRect(point.x - 2, point.y - 1, 5, 2)
     }
   }
@@ -924,9 +1192,9 @@ function rebuildBackgroundLayers() {
     )
     glowGradient.addColorStop(
       0,
-      `rgba(97, 176, 165, ${glow.opacity})`,
+      `rgba(${visual.glowRgb}, ${glow.opacity})`,
     )
-    glowGradient.addColorStop(1, 'rgba(50, 100, 95, 0)')
+    glowGradient.addColorStop(1, `rgba(${visual.glowRgb}, 0)`)
     spriteContext.fillStyle = glowGradient
     spriteContext.fillRect(0, 0, diameter, diameter)
     glow.sprite = sprite
@@ -1038,6 +1306,7 @@ function updatePerformanceReadout(rawDt) {
 function updateHud() {
   const player = state.player
   const mission = state.mission
+  const sector = getSector()
   const healthPercent = Math.max(0, (player.health / player.maxHealth) * 100)
   ui.healthText.textContent = `${Math.ceil(Math.max(0, player.health))} / ${player.maxHealth}`
   ui.healthBar.style.width = `${healthPercent}%`
@@ -1059,6 +1328,8 @@ function updateHud() {
   ui.empStatus.hidden = !state.emp.unlocked
   ui.empCooldown.textContent = state.emp.cooldown.toFixed(1)
   ui.empRadius.textContent = Math.round(state.emp.radius)
+  ui.hudSectorName.textContent = sector.name
+  ui.brandSector.textContent = `Dead Zone // ${sector.name}`
 
   const missionProgress = Math.min(
     100,
@@ -1220,6 +1491,9 @@ function handleResetSave() {
 
 function calculateRunRewards(success) {
   const recoveryRate = success ? 1 : 0.55
+  const sectorReward = success
+    ? getSector().gameplay.rewardBonus
+    : { scrap: 0, gpu: 0, reactor: 0 }
   const titanReward =
     state.titan.status === 'destroyed'
       ? TITAN_REWARD
@@ -1228,15 +1502,18 @@ function calculateRunRewards(success) {
     scrap:
       Math.floor(state.scrap * recoveryRate) +
       (success ? 24 : 0) +
-      titanReward.scrap,
+      titanReward.scrap +
+      sectorReward.scrap,
     gpu:
       Math.floor(state.totalGpu * recoveryRate) +
       (success ? 6 : 0) +
-      titanReward.gpu,
+      titanReward.gpu +
+      sectorReward.gpu,
     reactor:
       Math.floor(state.reactorCoresCollected * recoveryRate) +
       (success ? 1 : 0) +
-      titanReward.reactor,
+      titanReward.reactor +
+      sectorReward.reactor,
   }
 }
 
@@ -1251,6 +1528,8 @@ function finishRun(success) {
   keys.clear()
 
   const rewards = calculateRunRewards(success)
+  const sector = getSector()
+  const availableSectorBonus = sector.gameplay.rewardBonus
   saveData.currencies.scrap += rewards.scrap
   saveData.currencies.gpu += rewards.gpu
   saveData.currencies.reactor += rewards.reactor
@@ -1263,14 +1542,16 @@ function finishRun(success) {
   ui.summaryKicker.classList.toggle('success', success)
   ui.summaryTitle.textContent = success ? 'Sector salvaged' : 'Drone lost'
   ui.summaryCopy.textContent = success
-    ? 'Recovered hardware transferred to the hangar.'
-    : 'Emergency telemetry recovered part of the collected salvage.'
+    ? `${sector.name} hardware transferred to the hangar.`
+    : `Emergency telemetry recovered part of the ${sector.name} salvage.`
   ui.summaryTime.textContent = formatTime(state.elapsed)
   ui.summaryKills.textContent = state.kills
   ui.summaryLevel.textContent = state.level
   ui.summaryScrap.textContent = state.scrap
   ui.summaryGpus.textContent = state.totalGpu
   ui.summaryReactors.textContent = state.reactorCoresCollected
+  ui.summarySector.textContent = sector.name
+  ui.summaryResult.textContent = success ? 'Extracted' : 'Drone Lost'
   if (state.titan.status === 'destroyed') {
     ui.summaryTitan.textContent = 'Destroyed'
     ui.summaryTitanBonus.textContent =
@@ -1279,12 +1560,28 @@ function finishRun(success) {
     ui.summaryTitanBonus.hidden = false
   } else if (state.titan.status === 'active') {
     ui.summaryTitan.textContent = success
-      ? 'Active at extraction'
+      ? 'Survived · active at extraction'
       : 'Active at signal loss'
     ui.summaryTitanBonus.hidden = true
   } else {
     ui.summaryTitan.textContent = 'Avoided'
     ui.summaryTitanBonus.hidden = true
+  }
+  const sectorBonusParts = []
+  if (availableSectorBonus.scrap) {
+    sectorBonusParts.push(`+${availableSectorBonus.scrap} SCR`)
+  }
+  if (availableSectorBonus.gpu) {
+    sectorBonusParts.push(`+${availableSectorBonus.gpu} GPU`)
+  }
+  if (availableSectorBonus.reactor) {
+    sectorBonusParts.push(`+${availableSectorBonus.reactor} RCT`)
+  }
+  ui.summarySectorBonus.hidden = sectorBonusParts.length === 0
+  if (sectorBonusParts.length > 0) {
+    ui.summarySectorBonus.textContent = success
+      ? `${sector.name} extraction bonus · ${sectorBonusParts.join(' · ')}`
+      : `${sector.name} extraction bonus lost with the drone`
   }
   ui.rewardScrap.textContent = rewards.scrap
   ui.rewardGpu.textContent = rewards.gpu
@@ -1817,6 +2114,7 @@ function getMovementVector() {
 
 function randomEnemyType() {
   const difficulty = Math.min(state.elapsed / 120, 1)
+  const gameplay = getSector().gameplay
   const eliteWindow =
     state.elapsed >= 120 || state.mission.extractionActive
   if (eliteWindow) {
@@ -1824,8 +2122,16 @@ function randomEnemyType() {
     if (Math.random() < eliteChance) return 'reclaimer'
   }
   const roll = Math.random()
-  if (state.elapsed > 18 && roll < 0.07 + difficulty * 0.1) return 'heavy'
-  if (state.elapsed > 3.5 && roll < 0.3 + difficulty * 0.1) return 'scout'
+  const heavyThreshold = Math.min(
+    0.24,
+    (0.07 + difficulty * 0.1) * gameplay.heavyChanceMultiplier,
+  )
+  const scoutThreshold = Math.min(
+    0.58,
+    (0.3 + difficulty * 0.1) * gameplay.scoutChanceMultiplier,
+  )
+  if (state.elapsed > 18 && roll < heavyThreshold) return 'heavy'
+  if (state.elapsed > 3.5 && roll < scoutThreshold) return 'scout'
   return 'scavenger'
 }
 
@@ -2139,11 +2445,22 @@ function destroyEnemy(enemy, suppressEffects = false) {
 
 function rollResourceDrop(enemyType) {
   const dropWeights = enemyTypes[enemyType].drops
+  const multipliers = getSector().gameplay.dropMultipliers
+  const adjustedWeights = []
+  let totalChance = 0
+  for (const [resourceType, chance] of Object.entries(dropWeights)) {
+    const adjustedChance = chance * (multipliers[resourceType] || 1)
+    adjustedWeights.push([resourceType, adjustedChance])
+    totalChance += adjustedChance
+  }
+  // Preserve a small no-drop window when a sector boosts a resource on enemies
+  // whose baseline drop table is already close to one.
+  const scale = totalChance > 0.985 ? 0.985 / totalChance : 1
   const roll = Math.random()
   let cumulativeChance = 0
 
-  for (const [resourceType, chance] of Object.entries(dropWeights)) {
-    cumulativeChance += chance
+  for (const [resourceType, chance] of adjustedWeights) {
+    cumulativeChance += chance * scale
     if (roll < cumulativeChance) return resourceType
   }
 
@@ -2598,6 +2915,7 @@ function updateSpawning(dt) {
   if (queuedSpawn) state.spawnBacklog -= 1
   const surging = isReactorSurging()
   const extracting = state.mission.extractionActive
+  const sectorGameplay = getSector().gameplay
   const surgePressure = surging ? SURGE_SPAWN_INTERVAL_MULTIPLIER : 1
   const extractionPressure = extracting ? 0.82 : 1
   const baseSpawnInterval = Math.max(
@@ -2605,7 +2923,10 @@ function updateSpawning(dt) {
     0.86 - Math.min(state.elapsed, 180) * 0.00305,
   )
   const spawnInterval =
-    baseSpawnInterval * surgePressure * extractionPressure
+    baseSpawnInterval *
+    surgePressure *
+    extractionPressure *
+    sectorGameplay.spawnIntervalMultiplier
   const baseWaveChance = Math.max(
     0,
     Math.min(0.12, (state.elapsed - 55) * 0.00085),
@@ -2617,7 +2938,10 @@ function updateSpawning(dt) {
   }
   const maxEnemies = Math.min(
     getEntityCap('enemies'),
-    26 + Math.floor(state.elapsed * 0.28) + (extracting ? 8 : 0),
+    26 +
+      Math.floor(state.elapsed * 0.28) +
+      (extracting ? 8 : 0) +
+      sectorGameplay.enemyCapBonus,
   )
   let forcedType = null
   let introduction = null
@@ -3197,7 +3521,59 @@ function update(dt, wallDt = dt) {
   }
 }
 
+function drawSectorAtmosphere() {
+  const visual = getSector().visual
+  if (visual.effect === 'electric') {
+    if (reducedEffects) return
+    ctx.save()
+    ctx.lineWidth = 1.4
+    ctx.shadowColor = '#64d5ff'
+    ctx.shadowBlur = 7
+    for (const arc of sectorArcs) {
+      const charge =
+        (Math.sin(state.elapsed * arc.speed * 3.2 + arc.phase) + 1) * 0.5
+      if (charge < 0.74) continue
+      ctx.globalAlpha = (charge - 0.74) * 1.65
+      ctx.strokeStyle = '#79dcff'
+      ctx.beginPath()
+      for (let index = 0; index < arc.points.length; index += 1) {
+        const point = arc.points[index]
+        if (index === 0) ctx.moveTo(point.x, point.y)
+        else ctx.lineTo(point.x, point.y)
+      }
+      ctx.stroke()
+    }
+    ctx.restore()
+    return
+  }
+
+  if (visual.effect === 'radiation') {
+    const pulse = (Math.sin(state.elapsed * 1.35) + 1) * 0.5
+    ctx.save()
+    ctx.globalAlpha = (reducedEffects ? 0.012 : 0.018) + pulse * 0.018
+    ctx.fillStyle = '#c8b83e'
+    ctx.fillRect(0, 0, width, height)
+    if (!reducedEffects) {
+      const scanY = (state.elapsed * 24) % (height + 80) - 40
+      ctx.globalAlpha = 0.08 + pulse * 0.05
+      ctx.strokeStyle = '#e5c848'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(0, scanY)
+      ctx.lineTo(width, scanY)
+      ctx.stroke()
+      ctx.globalAlpha *= 0.45
+      ctx.beginPath()
+      ctx.moveTo(0, scanY + 7)
+      ctx.lineTo(width, scanY + 7)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+}
+
 function drawBackground() {
+  const visual = getSector().visual
   ctx.drawImage(backgroundLayer, 0, 0, width, height)
 
   if (!reducedEffects) {
@@ -3225,10 +3601,11 @@ function drawBackground() {
       (dust.y + state.elapsed * dust.speed * 0.34 + Math.cos(state.elapsed * 0.7 + dust.phase) * 5) %
       height
     ctx.globalAlpha = dust.opacity * (0.7 + Math.sin(state.elapsed * 1.2 + dust.phase) * 0.3)
-    ctx.fillStyle = '#c9b98f'
+    ctx.fillStyle = visual.dustColor
     ctx.fillRect(dustX, dustY, dust.size * 2.2, dust.size)
   }
   ctx.globalAlpha = 1
+  drawSectorAtmosphere()
   ctx.drawImage(vignetteLayer, 0, 0, width, height)
 }
 
@@ -4147,9 +4524,12 @@ window.addEventListener('keydown', (event) => {
     (state.mode === 'summary' || state.mode === 'menu') &&
     !event.target.closest?.('button')
   ) {
-    resetGame()
+    showSectorSelect()
   }
-  if (event.code === 'Escape' && state.mode === 'hangar') {
+  if (
+    event.code === 'Escape' &&
+    (state.mode === 'hangar' || state.mode === 'sector')
+  ) {
     showMainMenu()
   }
   if (event.code === 'KeyE') {
@@ -4220,13 +4600,23 @@ ui.hangarUpgrades.addEventListener('click', (event) => {
   const button = event.target.closest('[data-hangar-upgrade]')
   if (button) purchaseHangarUpgrade(button.dataset.hangarUpgrade)
 })
-ui.menuStartButton.addEventListener('click', resetGame)
+ui.sectorOptions.addEventListener('click', (event) => {
+  const startButton = event.target.closest('[data-start-sector]')
+  if (startButton) {
+    startMission(startButton.dataset.startSector)
+    return
+  }
+  const card = event.target.closest('[data-sector]')
+  if (card) previewSector(card.dataset.sector)
+})
+ui.menuStartButton.addEventListener('click', showSectorSelect)
 ui.menuHangarButton.addEventListener('click', showHangar)
 ui.resetSaveButton.addEventListener('click', handleResetSave)
+ui.sectorBackButton.addEventListener('click', showMainMenu)
 ui.hangarBackButton.addEventListener('click', showMainMenu)
-ui.hangarStartButton.addEventListener('click', resetGame)
+ui.hangarStartButton.addEventListener('click', showSectorSelect)
 ui.summaryHangarButton.addEventListener('click', showHangar)
-ui.summaryRestartButton.addEventListener('click', resetGame)
+ui.summaryRestartButton.addEventListener('click', showSectorSelect)
 ui.extractionButton.addEventListener('click', callExtraction)
 
 const resizeObserver = new ResizeObserver(resizeCanvas)
