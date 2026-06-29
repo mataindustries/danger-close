@@ -112,40 +112,75 @@ app.innerHTML = `
         </div>
       </div>
 
-      <div id="game-over" class="modal-overlay" hidden>
-        <div class="modal-panel game-over-panel" role="dialog" aria-modal="true" aria-labelledby="game-over-title">
-          <span class="modal-kicker danger">Signal lost</span>
-          <h2 id="game-over-title">Drone destroyed</h2>
-          <p>The dead zone reclaimed another machine.</p>
-          <div class="run-summary">
-            <div><span>Survival time</span><strong id="final-time">00:00</strong></div>
-            <div><span>Bots destroyed</span><strong id="final-kills">0</strong></div>
-            <div><span>Level reached</span><strong id="final-level">1</strong></div>
+      <div id="main-menu" class="modal-overlay front-screen">
+        <div class="modal-panel menu-panel" role="dialog" aria-modal="true" aria-labelledby="menu-title">
+          <span class="modal-kicker">Salvage command // Sector 07</span>
+          <h2 id="menu-title">Danger Close</h2>
+          <p>Deploy. Recover dead-zone hardware. Extract before the swarm closes in.</p>
+          <div class="profile-wallet" aria-label="Saved resources">
+            <div><span>Saved scrap</span><strong id="menu-scrap">0</strong></div>
+            <div><span>GPU fragments</span><strong id="menu-gpu">0</strong></div>
+            <div><span>Reactor fragments</span><strong id="menu-reactor">0</strong></div>
           </div>
-          <button id="restart-button" class="restart-button" type="button">
-            <span>Reinitialize drone</span>
-            <small>Press Enter</small>
-          </button>
+          <div class="screen-actions">
+            <button id="menu-start-button" class="primary-action" type="button">Start run</button>
+            <button id="menu-hangar-button" class="secondary-action" type="button">Hangar upgrades</button>
+            <button id="reset-save-button" class="danger-action" type="button">Reset save</button>
+          </div>
+          <p id="reset-save-status" class="screen-status" aria-live="polite"></p>
         </div>
       </div>
 
-      <div id="victory" class="modal-overlay" hidden>
-        <div class="modal-panel victory-panel" role="dialog" aria-modal="true" aria-labelledby="victory-title">
-          <span class="modal-kicker success">Extraction complete</span>
-          <h2 id="victory-title">Sector salvaged</h2>
-          <p>Valuable hardware recovered. Drone signal secured.</p>
-          <div class="run-summary victory-summary">
-            <div><span>Survival time</span><strong id="victory-time">00:00</strong></div>
-            <div><span>Bots destroyed</span><strong id="victory-kills">0</strong></div>
-            <div><span>Level reached</span><strong id="victory-level">1</strong></div>
-            <div><span>GPUs recovered</span><strong id="victory-gpus">0</strong></div>
-            <div><span>Scrap recovered</span><strong id="victory-scrap">0</strong></div>
-            <div><span>Reactor cores</span><strong id="victory-reactors">0</strong></div>
+      <div id="hangar" class="modal-overlay front-screen" hidden>
+        <div class="modal-panel hangar-panel" role="dialog" aria-modal="true" aria-labelledby="hangar-title">
+          <div class="hangar-heading">
+            <div>
+              <span class="modal-kicker">Drone repair bay</span>
+              <h2 id="hangar-title">Hangar upgrades</h2>
+              <p>Permanent hardware applies at the start of every run.</p>
+            </div>
+            <div class="hangar-wallet" aria-label="Saved resources">
+              <span>SCR <b id="hangar-scrap">0</b></span>
+              <span>GPU <b id="hangar-gpu">0</b></span>
+              <span>RCT <b id="hangar-reactor">0</b></span>
+            </div>
           </div>
-          <button id="victory-restart-button" class="restart-button" type="button">
-            <span>Salvage another sector</span>
-            <small>Press Enter</small>
-          </button>
+          <div id="hangar-upgrades" class="hangar-grid"></div>
+          <div class="hangar-actions">
+            <button id="hangar-back-button" class="secondary-action" type="button">Main menu</button>
+            <button id="hangar-start-button" class="primary-action" type="button">Start run</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="run-summary" class="modal-overlay front-screen" hidden>
+        <div class="modal-panel summary-panel" role="dialog" aria-modal="true" aria-labelledby="summary-title">
+          <span id="summary-kicker" class="modal-kicker">Run complete</span>
+          <h2 id="summary-title">Sector salvaged</h2>
+          <p id="summary-copy">Recovered hardware transferred to the hangar.</p>
+          <div class="run-summary detailed-summary">
+            <div><span>Survival time</span><strong id="summary-time">00:00</strong></div>
+            <div><span>Bots destroyed</span><strong id="summary-kills">0</strong></div>
+            <div><span>Level reached</span><strong id="summary-level">1</strong></div>
+            <div><span>Scrap collected</span><strong id="summary-scrap">0</strong></div>
+            <div><span>GPUs collected</span><strong id="summary-gpus">0</strong></div>
+            <div><span>Reactor cores</span><strong id="summary-reactors">0</strong></div>
+          </div>
+          <div class="reward-panel">
+            <span>Permanent resources earned</span>
+            <div>
+              <strong>+<b id="reward-scrap">0</b> SCR</strong>
+              <strong>+<b id="reward-gpu">0</b> GPU</strong>
+              <strong>+<b id="reward-reactor">0</b> RCT</strong>
+            </div>
+          </div>
+          <div class="summary-actions">
+            <button id="summary-hangar-button" class="secondary-action" type="button">Return to hangar</button>
+            <button id="summary-restart-button" class="primary-action" type="button">
+              Start new run
+              <small>Press Enter</small>
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -183,19 +218,36 @@ const ui = {
   empRadius: document.querySelector('#emp-radius-stat'),
   levelUp: document.querySelector('#level-up'),
   upgradeOptions: document.querySelector('#upgrade-options'),
-  gameOver: document.querySelector('#game-over'),
-  finalTime: document.querySelector('#final-time'),
-  finalKills: document.querySelector('#final-kills'),
-  finalLevel: document.querySelector('#final-level'),
-  restartButton: document.querySelector('#restart-button'),
-  victory: document.querySelector('#victory'),
-  victoryTime: document.querySelector('#victory-time'),
-  victoryKills: document.querySelector('#victory-kills'),
-  victoryLevel: document.querySelector('#victory-level'),
-  victoryGpus: document.querySelector('#victory-gpus'),
-  victoryScrap: document.querySelector('#victory-scrap'),
-  victoryReactors: document.querySelector('#victory-reactors'),
-  victoryRestartButton: document.querySelector('#victory-restart-button'),
+  mainMenu: document.querySelector('#main-menu'),
+  menuScrap: document.querySelector('#menu-scrap'),
+  menuGpu: document.querySelector('#menu-gpu'),
+  menuReactor: document.querySelector('#menu-reactor'),
+  menuStartButton: document.querySelector('#menu-start-button'),
+  menuHangarButton: document.querySelector('#menu-hangar-button'),
+  resetSaveButton: document.querySelector('#reset-save-button'),
+  resetSaveStatus: document.querySelector('#reset-save-status'),
+  hangar: document.querySelector('#hangar'),
+  hangarScrap: document.querySelector('#hangar-scrap'),
+  hangarGpu: document.querySelector('#hangar-gpu'),
+  hangarReactor: document.querySelector('#hangar-reactor'),
+  hangarUpgrades: document.querySelector('#hangar-upgrades'),
+  hangarBackButton: document.querySelector('#hangar-back-button'),
+  hangarStartButton: document.querySelector('#hangar-start-button'),
+  runSummary: document.querySelector('#run-summary'),
+  summaryKicker: document.querySelector('#summary-kicker'),
+  summaryTitle: document.querySelector('#summary-title'),
+  summaryCopy: document.querySelector('#summary-copy'),
+  summaryTime: document.querySelector('#summary-time'),
+  summaryKills: document.querySelector('#summary-kills'),
+  summaryLevel: document.querySelector('#summary-level'),
+  summaryScrap: document.querySelector('#summary-scrap'),
+  summaryGpus: document.querySelector('#summary-gpus'),
+  summaryReactors: document.querySelector('#summary-reactors'),
+  rewardScrap: document.querySelector('#reward-scrap'),
+  rewardGpu: document.querySelector('#reward-gpu'),
+  rewardReactor: document.querySelector('#reward-reactor'),
+  summaryHangarButton: document.querySelector('#summary-hangar-button'),
+  summaryRestartButton: document.querySelector('#summary-restart-button'),
   onboardingHint: document.querySelector('#onboarding-hint'),
   reactorStatus: document.querySelector('#reactor-status'),
   reactorTime: document.querySelector('#reactor-time'),
@@ -229,6 +281,7 @@ let ambientGlows = []
 const backgroundLayer = document.createElement('canvas')
 const vignetteLayer = document.createElement('canvas')
 let reducedEffects = false
+let resetSaveArmed = false
 
 const MOBILE_CAPS = {
   enemies: 64,
@@ -281,6 +334,9 @@ const MAX_EMP_RADIUS = 210
 const MAX_SIMULATION_DT = 1 / 30
 const SPIKE_THRESHOLD_MS = 80
 const SPIKE_INDICATOR_DURATION = 1.25
+const SAVE_KEY = 'danger-close-save-v1'
+const SAVE_VERSION = 1
+const MAX_UPGRADE_RANK = 5
 const MISSION_SALVAGE_REQUIRED = 220
 const EXTRACTION_DURATION = 60
 const SALVAGE_VALUES = {
@@ -294,6 +350,126 @@ const SURGE_MIN_FIRE_INTERVAL = 0.18
 const SURGE_SPAWN_INTERVAL_MULTIPLIER = 0.94
 const PICKUP_LIFETIME = 20
 let entityCaps = DESKTOP_CAPS
+
+const hangarUpgrades = [
+  {
+    id: 'hullPlating',
+    icon: 'HP',
+    title: 'Hull Plating',
+    description: 'Reinforced shell increases starting hull integrity.',
+    cost: (rank) => ({ scrap: 20 + rank * 18 }),
+    effect: (rank) => `${100 + rank * 8} starting hull`,
+  },
+  {
+    id: 'arcCapacitor',
+    icon: 'AC',
+    title: 'Arc Capacitor',
+    description: 'Higher-density capacitors improve starting Arc Pulse damage.',
+    cost: (rank) => ({ gpu: 10 + rank * 9 }),
+    effect: (rank) => `${18 + rank * 2} Arc damage`,
+  },
+  {
+    id: 'thrusterTuning',
+    icon: 'TT',
+    title: 'Thruster Tuning',
+    description: 'Calibrated drive units increase starting movement speed.',
+    cost: (rank) => ({
+      scrap: 18 + rank * 15,
+      gpu: 7 + rank * 6,
+    }),
+    effect: (rank) => `${230 + rank * 8} movement speed`,
+  },
+  {
+    id: 'salvageMagnet',
+    icon: 'SM',
+    title: 'Salvage Magnet',
+    description: 'Expanded induction coils pull pickups from farther away.',
+    cost: (rank) => ({ scrap: 16 + rank * 14 }),
+    effect: (rank) =>
+      rank === 0 ? 'Standard pickup reach' : `+${rank * 6}% pickup reach`,
+  },
+  {
+    id: 'batteryReserve',
+    icon: 'BR',
+    title: 'Battery Reserve',
+    description: 'Stored charge provides a shield buffer at deployment.',
+    cost: (rank) => ({
+      scrap: 22 + rank * 18,
+      gpu: 8 + rank * 7,
+    }),
+    effect: (rank) => `${rank * 5} starting shield`,
+  },
+  {
+    id: 'reactorHandling',
+    icon: 'RH',
+    title: 'Reactor Handling',
+    description: 'Improved containment extends Reactor Surge modestly.',
+    cost: (rank) => ({ reactor: 2 + rank * 2 }),
+    effect: (rank) => `${(10 + rank * 0.5).toFixed(1)}s Reactor Surge`,
+  },
+]
+
+function createDefaultSaveData() {
+  const upgrades = {}
+  for (const upgrade of hangarUpgrades) upgrades[upgrade.id] = 0
+  return {
+    version: SAVE_VERSION,
+    currencies: { scrap: 0, gpu: 0, reactor: 0 },
+    upgrades,
+  }
+}
+
+function safeInteger(value, maximum = Number.MAX_SAFE_INTEGER) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return 0
+  return Math.max(0, Math.min(maximum, Math.floor(number)))
+}
+
+function loadSaveData() {
+  const fallback = createDefaultSaveData()
+  try {
+    const raw = window.localStorage.getItem(SAVE_KEY)
+    if (!raw) return fallback
+    const stored = JSON.parse(raw)
+    if (!stored || stored.version !== SAVE_VERSION) return fallback
+
+    fallback.currencies.scrap = safeInteger(stored.currencies?.scrap)
+    fallback.currencies.gpu = safeInteger(stored.currencies?.gpu)
+    fallback.currencies.reactor = safeInteger(stored.currencies?.reactor)
+    for (const upgrade of hangarUpgrades) {
+      fallback.upgrades[upgrade.id] = safeInteger(
+        stored.upgrades?.[upgrade.id],
+        MAX_UPGRADE_RANK,
+      )
+    }
+  } catch {
+    return fallback
+  }
+  return fallback
+}
+
+function saveProgress() {
+  try {
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify(saveData))
+    return true
+  } catch {
+    return false
+  }
+}
+
+function getPermanentBonuses() {
+  const ranks = saveData.upgrades
+  return {
+    maxHealth: 100 + ranks.hullPlating * 8,
+    damage: 18 + ranks.arcCapacitor * 2,
+    speed: 230 + ranks.thrusterTuning * 8,
+    magnetMultiplier: 1 + ranks.salvageMagnet * 0.06,
+    startingShield: ranks.batteryReserve * 5,
+    surgeDuration: 10 + ranks.reactorHandling * 0.5,
+  }
+}
+
+let saveData = loadSaveData()
 
 const enemyTypes = {
   scavenger: {
@@ -342,6 +518,7 @@ const resourceTypes = {
 }
 
 function createInitialState() {
+  const permanent = getPermanentBonuses()
   return {
     mode: 'running',
     elapsed: 0,
@@ -363,8 +540,10 @@ function createInitialState() {
     scrap: 0,
     batteriesCollected: 0,
     reactorCoresCollected: 0,
+    runFinalized: false,
+    runSuccess: null,
     reactorSurge: 0,
-    reactorSurgeDuration: 10,
+    reactorSurgeDuration: permanent.surgeDuration,
     reactorEnemyCap: 0,
     warningFlash: 0,
     fps: 60,
@@ -388,13 +567,14 @@ function createInitialState() {
       x: width / 2,
       y: height / 2,
       radius: 19,
-      health: 100,
-      maxHealth: 100,
-      shield: 0,
+      health: permanent.maxHealth,
+      maxHealth: permanent.maxHealth,
+      shield: permanent.startingShield,
       maxShield: 30,
-      shieldDecayDelay: 0,
-      speed: 230,
-      damage: 18,
+      shieldDecayDelay: permanent.startingShield > 0 ? 18 : 0,
+      speed: permanent.speed,
+      damage: permanent.damage,
+      magnetMultiplier: permanent.magnetMultiplier,
       fireInterval: 0.52,
       bulletSpeed: 700,
       hitCooldown: 0,
@@ -430,11 +610,63 @@ function createInitialState() {
   }
 }
 
+function hideFrontScreens() {
+  ui.mainMenu.hidden = true
+  ui.hangar.hidden = true
+  ui.runSummary.hidden = true
+}
+
+function updateProfileWallets() {
+  const currencies = saveData.currencies
+  ui.menuScrap.textContent = currencies.scrap
+  ui.menuGpu.textContent = currencies.gpu
+  ui.menuReactor.textContent = currencies.reactor
+  ui.hangarScrap.textContent = currencies.scrap
+  ui.hangarGpu.textContent = currencies.gpu
+  ui.hangarReactor.textContent = currencies.reactor
+}
+
+function clearResetConfirmation() {
+  resetSaveArmed = false
+  ui.resetSaveButton.textContent = 'Reset save'
+  ui.resetSaveButton.classList.remove('is-armed')
+  ui.resetSaveStatus.textContent = ''
+}
+
+function showMainMenu() {
+  state = createInitialState()
+  state.mode = 'menu'
+  hideFrontScreens()
+  ui.levelUp.hidden = true
+  ui.mainMenu.hidden = false
+  ui.onboardingHint.classList.add('is-hidden')
+  pointer.active = false
+  keys.clear()
+  clearResetConfirmation()
+  updateProfileWallets()
+  updateHud()
+  lastFrame = performance.now()
+}
+
+function showHangar() {
+  state = createInitialState()
+  state.mode = 'hangar'
+  hideFrontScreens()
+  ui.levelUp.hidden = true
+  ui.hangar.hidden = false
+  ui.onboardingHint.classList.add('is-hidden')
+  pointer.active = false
+  keys.clear()
+  updateProfileWallets()
+  renderHangar()
+  updateHud()
+  lastFrame = performance.now()
+}
+
 function resetGame() {
   state = createInitialState()
+  hideFrontScreens()
   ui.levelUp.hidden = true
-  ui.gameOver.hidden = true
-  ui.victory.hidden = true
   ui.onboardingHint.classList.remove('is-hidden')
   ui.performanceValues.textContent =
     'FPS -- · EN 0 · BLT 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · FT --MS'
@@ -781,16 +1013,18 @@ function updateHud() {
     `${Math.min(mission.salvage, mission.required)} / ${mission.required}`
   ui.missionPanel.classList.toggle(
     'is-ready',
-    mission.ready && !mission.extractionActive,
+    mission.ready && !mission.extractionActive && state.mode === 'running',
   )
   ui.missionPanel.classList.toggle(
     'is-inbound',
-    mission.extractionActive && state.mode !== 'victory',
+    mission.extractionActive && state.mode === 'running',
   )
 
-  if (state.mode === 'victory') {
-    ui.missionStatus.textContent = 'Sector salvaged'
-    ui.missionCopy.textContent = 'Extraction complete'
+  if (state.mode === 'summary') {
+    ui.missionStatus.textContent = state.runSuccess
+      ? 'Sector salvaged'
+      : 'Drone lost'
+    ui.missionCopy.textContent = 'Run complete'
   } else if (mission.extractionActive) {
     ui.missionStatus.textContent = 'Extraction inbound'
     ui.missionCopy.textContent = 'Survive until pickup'
@@ -805,7 +1039,7 @@ function updateHud() {
   ui.extractionButton.hidden =
     !mission.ready || mission.extractionActive || state.mode !== 'running'
   ui.extractionCountdown.hidden =
-    !mission.extractionActive || state.mode === 'victory'
+    !mission.extractionActive || state.mode !== 'running'
   ui.extractionCountdown.textContent =
     `${Math.max(0, Math.ceil(mission.extractionTime))}s`
 
@@ -817,6 +1051,155 @@ function updateHud() {
     100,
     (state.reactorSurge / state.reactorSurgeDuration) * 100,
   )}%`
+}
+
+function canAfford(cost) {
+  return (
+    (cost.scrap || 0) <= saveData.currencies.scrap &&
+    (cost.gpu || 0) <= saveData.currencies.gpu &&
+    (cost.reactor || 0) <= saveData.currencies.reactor
+  )
+}
+
+function formatUpgradeCost(cost) {
+  const parts = []
+  if (cost.scrap) parts.push(`<span>${cost.scrap} SCR</span>`)
+  if (cost.gpu) parts.push(`<span>${cost.gpu} GPU</span>`)
+  if (cost.reactor) parts.push(`<span>${cost.reactor} RCT</span>`)
+  return parts.join('')
+}
+
+function renderHangar() {
+  updateProfileWallets()
+  ui.hangarUpgrades.innerHTML = hangarUpgrades
+    .map((upgrade) => {
+      const rank = saveData.upgrades[upgrade.id]
+      const maxed = rank >= MAX_UPGRADE_RANK
+      const cost = maxed ? {} : upgrade.cost(rank)
+      const affordable = !maxed && canAfford(cost)
+      return `
+        <article class="hangar-card${maxed ? ' is-maxed' : ''}">
+          <div class="hangar-card-heading">
+            <span class="hangar-icon">${upgrade.icon}</span>
+            <div>
+              <strong>${upgrade.title}</strong>
+              <span>Rank ${rank} / ${MAX_UPGRADE_RANK}</span>
+            </div>
+          </div>
+          <p>${upgrade.description}</p>
+          <div class="upgrade-effect">
+            <span>Current</span>
+            <b>${upgrade.effect(rank)}</b>
+            <span>${maxed ? 'Maximum rank installed' : `Next: ${upgrade.effect(rank + 1)}`}</span>
+          </div>
+          <button
+            class="hangar-buy-button"
+            type="button"
+            data-hangar-upgrade="${upgrade.id}"
+            ${affordable ? '' : 'disabled'}
+          >
+            <span>${maxed ? 'Max rank' : 'Install upgrade'}</span>
+            <small>${maxed ? 'Fully calibrated' : formatUpgradeCost(cost)}</small>
+          </button>
+        </article>
+      `
+    })
+    .join('')
+}
+
+function purchaseHangarUpgrade(id) {
+  if (state.mode !== 'hangar') return
+  const upgrade = hangarUpgrades.find((item) => item.id === id)
+  if (!upgrade) return
+
+  const rank = saveData.upgrades[id]
+  if (rank >= MAX_UPGRADE_RANK) return
+  const cost = upgrade.cost(rank)
+  if (!canAfford(cost)) return
+
+  saveData.currencies.scrap -= cost.scrap || 0
+  saveData.currencies.gpu -= cost.gpu || 0
+  saveData.currencies.reactor -= cost.reactor || 0
+  saveData.upgrades[id] = rank + 1
+  saveProgress()
+  renderHangar()
+}
+
+function handleResetSave() {
+  if (!resetSaveArmed) {
+    resetSaveArmed = true
+    ui.resetSaveButton.textContent = 'Confirm reset'
+    ui.resetSaveButton.classList.add('is-armed')
+    ui.resetSaveStatus.textContent =
+      'Press again to erase all currencies and upgrade ranks.'
+    return
+  }
+
+  saveData = createDefaultSaveData()
+  const saved = saveProgress()
+  resetSaveArmed = false
+  ui.resetSaveButton.textContent = 'Reset save'
+  ui.resetSaveButton.classList.remove('is-armed')
+  ui.resetSaveStatus.textContent = saved
+    ? 'Save data reset.'
+    : 'Storage unavailable; progress reset for this session.'
+  updateProfileWallets()
+}
+
+function calculateRunRewards(success) {
+  const recoveryRate = success ? 1 : 0.55
+  return {
+    scrap:
+      Math.floor(state.scrap * recoveryRate) + (success ? 24 : 0),
+    gpu:
+      Math.floor(state.totalGpu * recoveryRate) + (success ? 6 : 0),
+    reactor:
+      Math.floor(state.reactorCoresCollected * recoveryRate) +
+      (success ? 1 : 0),
+  }
+}
+
+function finishRun(success) {
+  if (state.mode !== 'running' || state.runFinalized) return
+  state.runFinalized = true
+  state.runSuccess = success
+  state.mode = 'summary'
+  state.mission.extractionActive = false
+  if (!success) state.player.health = 0
+  pointer.active = false
+  keys.clear()
+
+  const rewards = calculateRunRewards(success)
+  saveData.currencies.scrap += rewards.scrap
+  saveData.currencies.gpu += rewards.gpu
+  saveData.currencies.reactor += rewards.reactor
+  saveProgress()
+
+  ui.summaryKicker.textContent = success
+    ? 'Extraction complete'
+    : 'Signal lost'
+  ui.summaryKicker.classList.toggle('danger', !success)
+  ui.summaryKicker.classList.toggle('success', success)
+  ui.summaryTitle.textContent = success ? 'Sector salvaged' : 'Drone lost'
+  ui.summaryCopy.textContent = success
+    ? 'Recovered hardware transferred to the hangar.'
+    : 'Emergency telemetry recovered part of the collected salvage.'
+  ui.summaryTime.textContent = formatTime(state.elapsed)
+  ui.summaryKills.textContent = state.kills
+  ui.summaryLevel.textContent = state.level
+  ui.summaryScrap.textContent = state.scrap
+  ui.summaryGpus.textContent = state.totalGpu
+  ui.summaryReactors.textContent = state.reactorCoresCollected
+  ui.rewardScrap.textContent = rewards.scrap
+  ui.rewardGpu.textContent = rewards.gpu
+  ui.rewardReactor.textContent = rewards.reactor
+
+  hideFrontScreens()
+  ui.levelUp.hidden = true
+  ui.runSummary.hidden = false
+  updateProfileWallets()
+  updateHud()
+  lastFrame = performance.now()
 }
 
 function addMissionSalvage(type, amount = 1) {
@@ -889,10 +1272,7 @@ function callExtraction() {
 
 function winGame() {
   if (state.mode !== 'running') return
-  state.mode = 'victory'
   state.mission.extractionTime = 0
-  state.mission.extractionActive = false
-  pointer.active = false
   createFloatingText(
     'SECTOR SALVAGED',
     state.player.x,
@@ -902,14 +1282,7 @@ function winGame() {
     16,
     true,
   )
-  ui.victoryTime.textContent = formatTime(state.elapsed)
-  ui.victoryKills.textContent = state.kills
-  ui.victoryLevel.textContent = state.level
-  ui.victoryGpus.textContent = state.totalGpu
-  ui.victoryScrap.textContent = state.scrap
-  ui.victoryReactors.textContent = state.reactorCoresCollected
-  ui.victory.hidden = false
-  updateHud()
+  finishRun(true)
 }
 
 function updateMission(wallDt) {
@@ -1673,14 +2046,7 @@ function chooseUpgrade(id) {
 }
 
 function endGame() {
-  state.mode = 'gameover'
-  state.player.health = 0
-  pointer.active = false
-  ui.finalTime.textContent = formatTime(state.elapsed)
-  ui.finalKills.textContent = state.kills
-  ui.finalLevel.textContent = state.level
-  ui.gameOver.hidden = false
-  updateHud()
+  finishRun(false)
 }
 
 function applyPlayerDamage(amount) {
@@ -2112,7 +2478,8 @@ function updatePickups(dt) {
     const distanceSquared = dx * dx + dy * dy
     const batteryUrgency =
       pickup.type === 'battery' && player.health < player.maxHealth * 0.55 ? 1.18 : 1
-    const magnetRadius = resource.magnetRadius * batteryUrgency
+    const magnetRadius =
+      resource.magnetRadius * player.magnetMultiplier * batteryUrgency
     if (distanceSquared < magnetRadius * magnetRadius) {
       const distance = Math.sqrt(distanceSquared) || 1
       const pull = (1 - distance / magnetRadius) * 1380 + 110
@@ -2997,9 +3364,13 @@ window.addEventListener('keydown', (event) => {
   }
   if (
     event.code === 'Enter' &&
-    (state.mode === 'gameover' || state.mode === 'victory')
+    (state.mode === 'summary' || state.mode === 'menu') &&
+    !event.target.closest?.('button')
   ) {
     resetGame()
+  }
+  if (event.code === 'Escape' && state.mode === 'hangar') {
+    showMainMenu()
   }
   if (event.code === 'KeyE') {
     event.preventDefault()
@@ -3065,12 +3436,21 @@ ui.upgradeOptions.addEventListener('click', (event) => {
   const button = event.target.closest('[data-upgrade]')
   if (button) chooseUpgrade(button.dataset.upgrade)
 })
-ui.restartButton.addEventListener('click', resetGame)
-ui.victoryRestartButton.addEventListener('click', resetGame)
+ui.hangarUpgrades.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-hangar-upgrade]')
+  if (button) purchaseHangarUpgrade(button.dataset.hangarUpgrade)
+})
+ui.menuStartButton.addEventListener('click', resetGame)
+ui.menuHangarButton.addEventListener('click', showHangar)
+ui.resetSaveButton.addEventListener('click', handleResetSave)
+ui.hangarBackButton.addEventListener('click', showMainMenu)
+ui.hangarStartButton.addEventListener('click', resetGame)
+ui.summaryHangarButton.addEventListener('click', showHangar)
+ui.summaryRestartButton.addEventListener('click', resetGame)
 ui.extractionButton.addEventListener('click', callExtraction)
 
 const resizeObserver = new ResizeObserver(resizeCanvas)
 resizeObserver.observe(canvas)
 resizeCanvas()
-resetGame()
+showMainMenu()
 requestAnimationFrame(gameLoop)
