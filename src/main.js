@@ -41,6 +41,22 @@ app.innerHTML = `
         </div>
       </div>
 
+      <div id="mission-panel" class="mission-panel" aria-live="polite">
+        <div class="mission-heading">
+          <span>Mission objective</span>
+          <strong id="mission-status">Collecting salvage</strong>
+        </div>
+        <p id="mission-copy">Collect salvage to call extraction</p>
+        <div class="mission-progress"><i id="mission-progress-bar"></i></div>
+        <div class="mission-readout">
+          <b id="mission-salvage">0 / 220</b>
+          <button id="extraction-button" type="button" hidden>
+            Call extraction <small>E</small>
+          </button>
+          <strong id="extraction-countdown" hidden>60s</strong>
+        </div>
+      </div>
+
       <div id="onboarding-hint" class="onboarding-hint">
         <strong>Survive as long as possible</strong>
         <span class="desktop-control">Move with WASD / arrow keys</span>
@@ -112,6 +128,26 @@ app.innerHTML = `
           </button>
         </div>
       </div>
+
+      <div id="victory" class="modal-overlay" hidden>
+        <div class="modal-panel victory-panel" role="dialog" aria-modal="true" aria-labelledby="victory-title">
+          <span class="modal-kicker success">Extraction complete</span>
+          <h2 id="victory-title">Sector salvaged</h2>
+          <p>Valuable hardware recovered. Drone signal secured.</p>
+          <div class="run-summary victory-summary">
+            <div><span>Survival time</span><strong id="victory-time">00:00</strong></div>
+            <div><span>Bots destroyed</span><strong id="victory-kills">0</strong></div>
+            <div><span>Level reached</span><strong id="victory-level">1</strong></div>
+            <div><span>GPUs recovered</span><strong id="victory-gpus">0</strong></div>
+            <div><span>Scrap recovered</span><strong id="victory-scrap">0</strong></div>
+            <div><span>Reactor cores</span><strong id="victory-reactors">0</strong></div>
+          </div>
+          <button id="victory-restart-button" class="restart-button" type="button">
+            <span>Salvage another sector</span>
+            <small>Press Enter</small>
+          </button>
+        </div>
+      </div>
     </div>
   </section>
 `
@@ -132,6 +168,13 @@ const ui = {
   damage: document.querySelector('#damage-stat'),
   rate: document.querySelector('#rate-stat'),
   speed: document.querySelector('#speed-stat'),
+  missionPanel: document.querySelector('#mission-panel'),
+  missionStatus: document.querySelector('#mission-status'),
+  missionCopy: document.querySelector('#mission-copy'),
+  missionProgress: document.querySelector('#mission-progress-bar'),
+  missionSalvage: document.querySelector('#mission-salvage'),
+  extractionButton: document.querySelector('#extraction-button'),
+  extractionCountdown: document.querySelector('#extraction-countdown'),
   orbitStatus: document.querySelector('#orbit-status'),
   orbitCount: document.querySelector('#orbit-count-stat'),
   orbitDamage: document.querySelector('#orbit-damage-stat'),
@@ -145,6 +188,14 @@ const ui = {
   finalKills: document.querySelector('#final-kills'),
   finalLevel: document.querySelector('#final-level'),
   restartButton: document.querySelector('#restart-button'),
+  victory: document.querySelector('#victory'),
+  victoryTime: document.querySelector('#victory-time'),
+  victoryKills: document.querySelector('#victory-kills'),
+  victoryLevel: document.querySelector('#victory-level'),
+  victoryGpus: document.querySelector('#victory-gpus'),
+  victoryScrap: document.querySelector('#victory-scrap'),
+  victoryReactors: document.querySelector('#victory-reactors'),
+  victoryRestartButton: document.querySelector('#victory-restart-button'),
   onboardingHint: document.querySelector('#onboarding-hint'),
   reactorStatus: document.querySelector('#reactor-status'),
   reactorTime: document.querySelector('#reactor-time'),
@@ -182,6 +233,7 @@ let reducedEffects = false
 const MOBILE_CAPS = {
   enemies: 64,
   heavyEnemies: 7,
+  reclaimers: 1,
   bullets: 90,
   pickups: 40,
   particles: 130,
@@ -191,6 +243,7 @@ const MOBILE_CAPS = {
   surge: {
     enemies: 48,
     heavyEnemies: 5,
+    reclaimers: 1,
     bullets: 48,
     pickups: 24,
     particles: 52,
@@ -202,6 +255,7 @@ const MOBILE_CAPS = {
 const DESKTOP_CAPS = {
   enemies: 96,
   heavyEnemies: 10,
+  reclaimers: 2,
   bullets: 150,
   pickups: 60,
   particles: 220,
@@ -211,6 +265,7 @@ const DESKTOP_CAPS = {
   surge: {
     enemies: 72,
     heavyEnemies: 8,
+    reclaimers: 1,
     bullets: 86,
     pickups: 36,
     particles: 90,
@@ -226,6 +281,14 @@ const MAX_EMP_RADIUS = 210
 const MAX_SIMULATION_DT = 1 / 30
 const SPIKE_THRESHOLD_MS = 80
 const SPIKE_INDICATOR_DURATION = 1.25
+const MISSION_SALVAGE_REQUIRED = 220
+const EXTRACTION_DURATION = 60
+const SALVAGE_VALUES = {
+  gpu: 3,
+  scrap: 2,
+  battery: 1,
+  reactor: 24,
+}
 const SURGE_FIRE_INTERVAL_MULTIPLIER = 0.7
 const SURGE_MIN_FIRE_INTERVAL = 0.18
 const SURGE_SPAWN_INTERVAL_MULTIPLIER = 0.94
@@ -260,6 +323,15 @@ const enemyTypes = {
     score: 2,
     drops: { gpu: 0.2, scrap: 0.48, battery: 0.21, reactor: 0.025 },
   },
+  reclaimer: {
+    radius: 32,
+    speed: 54,
+    health: 230,
+    damage: 18,
+    color: '#d95778',
+    score: 4,
+    drops: { gpu: 0.3, scrap: 0.34, battery: 0.18, reactor: 0.15 },
+  },
 }
 
 const resourceTypes = {
@@ -282,12 +354,15 @@ function createInitialState() {
     levelUpChoices: [],
     scoutIntroduced: false,
     heavyIntroduced: false,
+    reclaimerIntroduced: false,
+    reclaimerDetected: false,
     level: 1,
     gpu: 0,
     gpuNeeded: 6,
     totalGpu: 0,
     scrap: 0,
     batteriesCollected: 0,
+    reactorCoresCollected: 0,
     reactorSurge: 0,
     reactorSurgeDuration: 10,
     reactorEnemyCap: 0,
@@ -299,6 +374,14 @@ function createInitialState() {
     diagnosticsClock: 0,
     spikeTimer: 0,
     spawnBacklog: 0,
+    mission: {
+      salvage: 0,
+      required: MISSION_SALVAGE_REQUIRED,
+      ready: false,
+      extractionActive: false,
+      extractionTime: EXTRACTION_DURATION,
+      extractionDuration: EXTRACTION_DURATION,
+    },
     kills: 0,
     nextEntityId: 1,
     player: {
@@ -351,6 +434,7 @@ function resetGame() {
   state = createInitialState()
   ui.levelUp.hidden = true
   ui.gameOver.hidden = true
+  ui.victory.hidden = true
   ui.onboardingHint.classList.remove('is-hidden')
   ui.performanceValues.textContent =
     'FPS -- · EN 0 · BLT 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · FT --MS'
@@ -665,6 +749,7 @@ function updatePerformanceReadout(rawDt) {
 
 function updateHud() {
   const player = state.player
+  const mission = state.mission
   const healthPercent = Math.max(0, (player.health / player.maxHealth) * 100)
   ui.healthText.textContent = `${Math.ceil(Math.max(0, player.health))} / ${player.maxHealth}`
   ui.healthBar.style.width = `${healthPercent}%`
@@ -687,6 +772,43 @@ function updateHud() {
   ui.empCooldown.textContent = state.emp.cooldown.toFixed(1)
   ui.empRadius.textContent = Math.round(state.emp.radius)
 
+  const missionProgress = Math.min(
+    100,
+    (mission.salvage / mission.required) * 100,
+  )
+  ui.missionProgress.style.width = `${missionProgress}%`
+  ui.missionSalvage.textContent =
+    `${Math.min(mission.salvage, mission.required)} / ${mission.required}`
+  ui.missionPanel.classList.toggle(
+    'is-ready',
+    mission.ready && !mission.extractionActive,
+  )
+  ui.missionPanel.classList.toggle(
+    'is-inbound',
+    mission.extractionActive && state.mode !== 'victory',
+  )
+
+  if (state.mode === 'victory') {
+    ui.missionStatus.textContent = 'Sector salvaged'
+    ui.missionCopy.textContent = 'Extraction complete'
+  } else if (mission.extractionActive) {
+    ui.missionStatus.textContent = 'Extraction inbound'
+    ui.missionCopy.textContent = 'Survive until pickup'
+  } else if (mission.ready) {
+    ui.missionStatus.textContent = 'Extraction ready'
+    ui.missionCopy.textContent = 'Call extraction when prepared'
+  } else {
+    ui.missionStatus.textContent = 'Collecting salvage'
+    ui.missionCopy.textContent = 'Collect salvage to call extraction'
+  }
+
+  ui.extractionButton.hidden =
+    !mission.ready || mission.extractionActive || state.mode !== 'running'
+  ui.extractionCountdown.hidden =
+    !mission.extractionActive || state.mode === 'victory'
+  ui.extractionCountdown.textContent =
+    `${Math.max(0, Math.ceil(mission.extractionTime))}s`
+
   const surging = isReactorSurging()
   ui.reactorStatus.hidden = !surging
   ui.weaponCard.classList.toggle('is-surging', surging)
@@ -695,6 +817,108 @@ function updateHud() {
     100,
     (state.reactorSurge / state.reactorSurgeDuration) * 100,
   )}%`
+}
+
+function addMissionSalvage(type, amount = 1) {
+  const value = SALVAGE_VALUES[type] || 0
+  if (value <= 0) return
+
+  const mission = state.mission
+  mission.salvage += value * amount
+  if (mission.ready || mission.salvage < mission.required) return
+
+  mission.ready = true
+  state.introClock = 0
+  ui.onboardingHint.classList.add('is-hidden')
+  createFloatingText(
+    'EXTRACTION READY',
+    state.player.x,
+    state.player.y - 50,
+    '#8dffd0',
+    1.6,
+    15,
+    true,
+  )
+  addRing({
+    x: state.player.x,
+    y: state.player.y,
+    radius: state.player.radius + 5,
+    maxRadius: 105,
+    life: 0.75,
+    maxLife: 0.75,
+    color: '#73efc1',
+  }, true)
+}
+
+function callExtraction() {
+  const mission = state.mission
+  if (
+    state.mode !== 'running' ||
+    !mission.ready ||
+    mission.extractionActive
+  ) {
+    return
+  }
+
+  mission.extractionActive = true
+  mission.extractionTime = mission.extractionDuration
+  state.spawnClock = Math.min(state.spawnClock, 0.18)
+  state.introClock = 0
+  ui.onboardingHint.classList.add('is-hidden')
+  createFloatingText(
+    'EXTRACTION CALLED',
+    state.player.x,
+    state.player.y - 50,
+    '#9cffe1',
+    1.6,
+    15,
+    true,
+  )
+  addRing({
+    kind: 'extraction',
+    x: state.player.x,
+    y: state.player.y,
+    radius: state.player.radius + 8,
+    maxRadius: 135,
+    life: 0.9,
+    maxLife: 0.9,
+    color: '#78f3ca',
+  }, true)
+  updateHud()
+}
+
+function winGame() {
+  if (state.mode !== 'running') return
+  state.mode = 'victory'
+  state.mission.extractionTime = 0
+  state.mission.extractionActive = false
+  pointer.active = false
+  createFloatingText(
+    'SECTOR SALVAGED',
+    state.player.x,
+    state.player.y - 54,
+    '#b4ffe3',
+    2,
+    16,
+    true,
+  )
+  ui.victoryTime.textContent = formatTime(state.elapsed)
+  ui.victoryKills.textContent = state.kills
+  ui.victoryLevel.textContent = state.level
+  ui.victoryGpus.textContent = state.totalGpu
+  ui.victoryScrap.textContent = state.scrap
+  ui.victoryReactors.textContent = state.reactorCoresCollected
+  ui.victory.hidden = false
+  updateHud()
+}
+
+function updateMission(wallDt) {
+  if (!state.mission.extractionActive) return
+  state.mission.extractionTime = Math.max(
+    0,
+    state.mission.extractionTime - wallDt,
+  )
+  if (state.mission.extractionTime <= 0) winGame()
 }
 
 function getMovementVector() {
@@ -730,6 +954,12 @@ function getMovementVector() {
 
 function randomEnemyType() {
   const difficulty = Math.min(state.elapsed / 120, 1)
+  const eliteWindow =
+    state.elapsed >= 120 || state.mission.extractionActive
+  if (eliteWindow) {
+    const eliteChance = state.mission.extractionActive ? 0.055 : 0.016
+    if (Math.random() < eliteChance) return 'reclaimer'
+  }
   const roll = Math.random()
   if (state.elapsed > 18 && roll < 0.07 + difficulty * 0.1) return 'heavy'
   if (state.elapsed > 3.5 && roll < 0.3 + difficulty * 0.1) return 'scout'
@@ -775,6 +1005,13 @@ function spawnEnemy(forcedType = null) {
   }
 
   let typeName = forcedType || randomEnemyType()
+  if (typeName === 'reclaimer') {
+    let reclaimerCount = 0
+    for (const enemy of state.enemies) {
+      if (!enemy.dead && enemy.type === 'reclaimer') reclaimerCount += 1
+    }
+    if (reclaimerCount >= getEntityCap('reclaimers')) typeName = 'heavy'
+  }
   if (typeName === 'heavy') {
     let heavyCount = 0
     for (const enemy of state.enemies) {
@@ -810,6 +1047,20 @@ function spawnEnemy(forcedType = null) {
     orbitCooldown: 0,
     dead: false,
   })
+
+  if (typeName === 'reclaimer' && !state.reclaimerDetected) {
+    state.reclaimerDetected = true
+    state.warningFlash = Math.max(state.warningFlash, 0.5)
+    createFloatingText(
+      'RECLAIMER DETECTED',
+      state.player.x,
+      state.player.y - 58,
+      '#ff8fa8',
+      1.7,
+      15,
+      true,
+    )
+  }
   return true
 }
 
@@ -981,7 +1232,7 @@ function destroyEnemy(enemy, suppressEffects = false) {
       enemy.x,
       enemy.y,
       enemy.color,
-      enemy.type === 'heavy' ? 20 : 12,
+      enemy.type === 'reclaimer' ? 24 : enemy.type === 'heavy' ? 20 : 12,
     )
     addRing({
       x: enemy.x,
@@ -996,6 +1247,12 @@ function destroyEnemy(enemy, suppressEffects = false) {
 
   const resourceType = rollResourceDrop(enemy.type)
   if (resourceType) spawnResourcePickup(resourceType, enemy)
+  if (enemy.type === 'reclaimer') {
+    const bonusRoll = Math.random()
+    const bonusType =
+      bonusRoll < 0.18 ? 'reactor' : bonusRoll < 0.62 ? 'gpu' : 'scrap'
+    spawnResourcePickup(bonusType, enemy)
+  }
 }
 
 function rollResourceDrop(enemyType) {
@@ -1032,11 +1289,14 @@ function spawnResourcePickup(type, enemy) {
 
   const resource = resourceTypes[type]
   const pickupMargin = resource.radius + 10
-  const isHeavyScrap = type === 'scrap' && enemy.type === 'heavy'
+  const isValuableScrap =
+    type === 'scrap' &&
+    (enemy.type === 'heavy' || enemy.type === 'reclaimer')
+  const doubleScrapChance = enemy.type === 'reclaimer' ? 0.8 : 0.55
 
   state.pickups.push({
     type,
-    value: isHeavyScrap && Math.random() < 0.55 ? 2 : 1,
+    value: isValuableScrap && Math.random() < doubleScrapChance ? 2 : 1,
     x: Math.max(pickupMargin, Math.min(width - pickupMargin, enemy.x)),
     y: Math.max(pickupMargin, Math.min(height - pickupMargin, enemy.y)),
     vx: (Math.random() - 0.5) * 34,
@@ -1050,6 +1310,7 @@ function spawnResourcePickup(type, enemy) {
 function collectGpu(pickup) {
   state.gpu += 1
   state.totalGpu += 1
+  addMissionSalvage('gpu')
   createHitEffect(pickup.x, pickup.y, '#7dff9b', 16)
   createFloatingText('+GPU', pickup.x, pickup.y - 12, '#92ffad', 0.9, 12, true)
   addRing({
@@ -1081,6 +1342,7 @@ function collectBattery(pickup) {
   player.shield = Math.min(player.maxShield, player.shield + shieldGain)
   player.shieldDecayDelay = 12
   state.batteriesCollected += 1
+  addMissionSalvage('battery')
 
   createHitEffect(pickup.x, pickup.y, '#62ceff', 18)
   createFloatingText('+BATTERY', pickup.x, pickup.y - 14, '#83dcff', 1, 12, true)
@@ -1097,6 +1359,7 @@ function collectBattery(pickup) {
 
 function collectScrap(pickup) {
   state.scrap += pickup.value
+  addMissionSalvage('scrap', pickup.value)
   createHitEffect(pickup.x, pickup.y, '#d9e1df', 5)
   createHitEffect(pickup.x, pickup.y, '#f0a056', 6)
   createFloatingText(
@@ -1120,6 +1383,8 @@ function collectScrap(pickup) {
 }
 
 function collectReactor(pickup) {
+  state.reactorCoresCollected += 1
+  addMissionSalvage('reactor')
   state.reactorSurge = state.reactorSurgeDuration
   // Never grow a pre-existing crowd when surge starts. Typical mobile runs use
   // the lower surge ceiling; a busier scene is frozen at its current count
@@ -1457,28 +1722,38 @@ function updateSpawning(dt) {
   const queuedSpawn = state.spawnBacklog > 0
   if (queuedSpawn) state.spawnBacklog -= 1
   const surging = isReactorSurging()
+  const extracting = state.mission.extractionActive
   const surgePressure = surging ? SURGE_SPAWN_INTERVAL_MULTIPLIER : 1
+  const extractionPressure = extracting ? 0.82 : 1
   const baseSpawnInterval = Math.max(
     0.31,
     0.86 - Math.min(state.elapsed, 180) * 0.00305,
   )
-  const spawnInterval = baseSpawnInterval * surgePressure
+  const spawnInterval =
+    baseSpawnInterval * surgePressure * extractionPressure
   const baseWaveChance = Math.max(
     0,
     Math.min(0.12, (state.elapsed - 55) * 0.00085),
   )
-  const waveChance = surging ? Math.min(0.06, baseWaveChance) : baseWaveChance
+  let waveChance = surging ? Math.min(0.06, baseWaveChance) : baseWaveChance
+  if (extracting) waveChance = Math.min(0.15, waveChance + 0.04)
   if (!queuedSpawn && Math.random() < waveChance) {
     state.spawnBacklog = 1
   }
   const maxEnemies = Math.min(
     getEntityCap('enemies'),
-    26 + Math.floor(state.elapsed * 0.28),
+    26 + Math.floor(state.elapsed * 0.28) + (extracting ? 8 : 0),
   )
   let forcedType = null
   let introduction = null
 
-  if (state.elapsed >= 4 && !state.scoutIntroduced) {
+  if (
+    (extracting || state.elapsed >= 120) &&
+    !state.reclaimerIntroduced
+  ) {
+    forcedType = 'reclaimer'
+    introduction = 'reclaimer'
+  } else if (state.elapsed >= 4 && !state.scoutIntroduced) {
     forcedType = 'scout'
     introduction = 'scout'
   } else if (state.elapsed >= 14 && !state.heavyIntroduced) {
@@ -1492,6 +1767,8 @@ function updateSpawning(dt) {
     state.scoutIntroduced = true
   } else if (spawned && introduction === 'heavy') {
     state.heavyIntroduced = true
+  } else if (spawned && introduction === 'reclaimer') {
+    state.reclaimerIntroduced = true
   } else if (!spawned) {
     state.spawnBacklog = 0
   }
@@ -1935,6 +2212,8 @@ function update(dt, wallDt = dt) {
   }
 
   state.elapsed += dt
+  updateMission(wallDt)
+  if (state.mode !== 'running') return
   state.reactorSurge = Math.max(0, state.reactorSurge - wallDt)
   state.introClock -= dt
   if (state.introClock <= 0) ui.onboardingHint.classList.add('is-hidden')
@@ -2205,7 +2484,19 @@ function drawEnemy(enemy) {
     ctx.fillStyle = enemy.flash > 0 ? '#fff1d1' : '#251d1c'
     ctx.strokeStyle = enemy.flash > 0 ? '#fff3dc' : enemy.color
     ctx.lineWidth = 2
-    if (enemy.type === 'scout') {
+    if (enemy.type === 'reclaimer') {
+      const radius = enemy.radius
+      ctx.beginPath()
+      ctx.moveTo(radius * 0.9, 0)
+      ctx.lineTo(radius * 0.35, radius * 0.72)
+      ctx.lineTo(-radius * 0.8, radius * 0.58)
+      ctx.lineTo(-radius, 0)
+      ctx.lineTo(-radius * 0.8, -radius * 0.58)
+      ctx.lineTo(radius * 0.35, -radius * 0.72)
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
+    } else if (enemy.type === 'scout') {
       ctx.beginPath()
       ctx.moveTo(13, 0)
       ctx.lineTo(-11, 9)
@@ -2235,7 +2526,31 @@ function drawEnemy(enemy) {
   ctx.fillStyle = enemy.flash > 0 ? '#fff1d1' : '#251d1c'
   ctx.lineWidth = 2
 
-  if (enemy.type === 'scout') {
+  if (enemy.type === 'reclaimer') {
+    const radius = enemy.radius
+    for (const side of [-1, 1]) {
+      ctx.beginPath()
+      ctx.moveTo(-radius * 0.35, side * radius * 0.48)
+      ctx.lineTo(-radius * 0.72, side * radius * 0.9)
+      ctx.lineTo(-radius * 0.98, side * radius * 0.72)
+      ctx.stroke()
+    }
+    ctx.beginPath()
+    ctx.moveTo(radius * 0.92, 0)
+    ctx.lineTo(radius * 0.42, radius * 0.7)
+    ctx.lineTo(-radius * 0.72, radius * 0.6)
+    ctx.lineTo(-radius, radius * 0.2)
+    ctx.lineTo(-radius, -radius * 0.2)
+    ctx.lineTo(-radius * 0.72, -radius * 0.6)
+    ctx.lineTo(radius * 0.42, -radius * 0.7)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    ctx.fillStyle = '#15191c'
+    ctx.fillRect(-radius * 0.62, -radius * 0.38, radius * 0.5, radius * 0.76)
+    ctx.strokeStyle = '#8c304c'
+    ctx.strokeRect(-radius * 0.06, -radius * 0.56, radius * 0.42, radius * 1.12)
+  } else if (enemy.type === 'scout') {
     for (const side of [-1, 1]) {
       ctx.beginPath()
       ctx.moveTo(-8, side * 7)
@@ -2552,6 +2867,44 @@ function drawSurgePulse() {
   ctx.restore()
 }
 
+function drawExtractionBeacon() {
+  if (!state.mission.extractionActive) return
+  const pulse = (Math.sin(state.elapsed * 4.5) + 1) * 0.5
+  const radius = 72 + pulse * 10
+
+  ctx.save()
+  ctx.translate(state.player.x, state.player.y)
+  ctx.globalAlpha = 0.24 + pulse * 0.2
+  ctx.strokeStyle = '#78f3ca'
+  ctx.shadowColor = '#59dbb5'
+  ctx.shadowBlur = reducedEffects ? 0 : 10
+  ctx.lineWidth = 1.5
+  ctx.beginPath()
+  ctx.arc(0, 0, radius, 0, TAU)
+  ctx.stroke()
+  ctx.shadowBlur = 0
+
+  ctx.globalAlpha = 0.5 + pulse * 0.25
+  for (let index = 0; index < 4; index += 1) {
+    const angle = index * (TAU / 4)
+    const inner = radius - 7
+    const outer = radius + 7
+    ctx.beginPath()
+    ctx.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner)
+    ctx.lineTo(Math.cos(angle) * outer, Math.sin(angle) * outer)
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+
+function drawExtractionBorder() {
+  if (!state.mission.extractionActive) return
+  const pulse = (Math.sin(state.elapsed * 3.5) + 1) * 0.5
+  ctx.strokeStyle = `rgba(111, 244, 201, ${0.14 + pulse * 0.16})`
+  ctx.lineWidth = 2
+  ctx.strokeRect(5, 5, width - 10, height - 10)
+}
+
 function drawTouchControl() {
   if (!pointer.active) return
   const dx = pointer.x - pointer.originX
@@ -2585,11 +2938,13 @@ function render() {
   state.enemies.forEach(drawEnemy)
   drawBullets()
   drawOrbitDrones()
+  drawExtractionBeacon()
   drawPlayer()
   drawSurgePulse()
   drawEffects()
   drawTouchControl()
   ctx.restore()
+  drawExtractionBorder()
 
   if (state.warningFlash > 0) {
     const alpha = state.warningFlash * 0.13
@@ -2640,7 +2995,16 @@ window.addEventListener('keydown', (event) => {
     event.preventDefault()
     keys.add(event.code)
   }
-  if (event.code === 'Enter' && state.mode === 'gameover') resetGame()
+  if (
+    event.code === 'Enter' &&
+    (state.mode === 'gameover' || state.mode === 'victory')
+  ) {
+    resetGame()
+  }
+  if (event.code === 'KeyE') {
+    event.preventDefault()
+    callExtraction()
+  }
   if (state.mode === 'levelup' && ['Digit1', 'Digit2', 'Digit3'].includes(event.code)) {
     const choice = state.levelUpChoices[Number(event.code.at(-1)) - 1]
     if (choice) chooseUpgrade(choice.id)
@@ -2702,6 +3066,8 @@ ui.upgradeOptions.addEventListener('click', (event) => {
   if (button) chooseUpgrade(button.dataset.upgrade)
 })
 ui.restartButton.addEventListener('click', resetGame)
+ui.victoryRestartButton.addEventListener('click', resetGame)
+ui.extractionButton.addEventListener('click', callExtraction)
 
 const resizeObserver = new ResizeObserver(resizeCanvas)
 resizeObserver.observe(canvas)

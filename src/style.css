@@ -337,6 +337,125 @@ button {
   color: #e8aa69;
 }
 
+.mission-panel {
+  position: absolute;
+  z-index: 7;
+  top: 82px;
+  right: 22px;
+  width: 292px;
+  padding: 9px 11px 10px;
+  pointer-events: none;
+  border: 1px solid rgba(105, 191, 194, 0.2);
+  border-left: 2px solid rgba(112, 237, 244, 0.65);
+  background: rgba(4, 12, 14, 0.88);
+}
+
+.mission-heading,
+.mission-readout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mission-heading span {
+  color: #5f7b7e;
+  font-size: 0.46rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.mission-heading strong {
+  color: #c9f5f3;
+  font-family: var(--font-display);
+  font-size: 0.61rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.mission-panel p {
+  margin: 4px 0 7px;
+  color: #748d90;
+  font-size: 0.52rem;
+}
+
+.mission-progress {
+  height: 3px;
+  overflow: hidden;
+  background: rgba(1, 5, 6, 0.78);
+}
+
+.mission-progress i {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: linear-gradient(90deg, #36a9ae, #75edf1);
+  transition: width 180ms ease;
+}
+
+.mission-readout {
+  min-height: 18px;
+  margin-top: 5px;
+}
+
+.mission-readout > b {
+  color: var(--cyan);
+  font-size: 0.58rem;
+  font-weight: 500;
+}
+
+.mission-readout > strong {
+  color: #a8ffe1;
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+}
+
+.mission-readout button {
+  min-height: 34px;
+  padding: 6px 9px;
+  pointer-events: auto;
+  color: #061411;
+  border: 0;
+  background: #7bf0c5;
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  touch-action: manipulation;
+}
+
+.mission-readout button[hidden],
+.mission-readout > strong[hidden] {
+  display: none;
+}
+
+.mission-readout button small {
+  margin-left: 4px;
+  opacity: 0.55;
+}
+
+.mission-panel.is-ready,
+.mission-panel.is-inbound {
+  border-left-color: #78f3ca;
+}
+
+.mission-panel.is-ready .mission-heading strong,
+.mission-panel.is-inbound .mission-heading strong {
+  color: #9cffe1;
+}
+
+.mission-panel.is-ready .mission-progress i,
+.mission-panel.is-inbound .mission-progress i {
+  background: #78f3ca;
+}
+
+.mission-panel.is-inbound {
+  animation: extraction-panel-pulse 1.6s ease-in-out infinite;
+}
+
 .onboarding-hint {
   position: absolute;
   z-index: 6;
@@ -679,6 +798,10 @@ button {
   color: var(--red);
 }
 
+.modal-kicker.success {
+  color: #78f3ca;
+}
+
 .modal-panel h2 {
   margin: 0;
   color: #efffff;
@@ -808,6 +931,11 @@ button {
   text-align: center;
 }
 
+.victory-panel {
+  width: min(650px, 100%);
+  text-align: center;
+}
+
 .run-summary {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -823,6 +951,14 @@ button {
 
 .run-summary div:last-child {
   border-right: 0;
+}
+
+.victory-summary div:nth-child(3n) {
+  border-right: 0;
+}
+
+.victory-summary div:nth-child(n + 4) {
+  border-top: 1px solid rgba(106, 193, 197, 0.15);
 }
 
 .run-summary span {
@@ -894,6 +1030,18 @@ button {
   }
   50% {
     border-color: rgba(255, 210, 92, 0.72);
+  }
+}
+
+@keyframes extraction-panel-pulse {
+  0%,
+  100% {
+    border-color: rgba(83, 205, 166, 0.3);
+    border-left-color: #78f3ca;
+  }
+  50% {
+    border-color: rgba(124, 255, 214, 0.62);
+    border-left-color: #c1ffe9;
   }
 }
 
@@ -1025,14 +1173,32 @@ button {
   }
 
   .onboarding-hint {
-    top: 106px;
+    top: 178px;
     width: min(310px, calc(100% - 32px));
     min-width: 0;
     padding: 9px 12px;
   }
 
   .reactor-status {
-    top: 106px;
+    top: 194px;
+  }
+
+  .mission-panel {
+    top: 102px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    padding: 8px 10px 9px;
+  }
+
+  .mission-panel p {
+    margin-block: 3px 5px;
+  }
+
+  .mission-readout button {
+    min-height: 38px;
+    padding-inline: 12px;
+    font-size: 0.6rem;
   }
 
   .onboarding-hint strong {
@@ -1148,6 +1314,10 @@ button {
     border-color: var(--cyan);
     background: rgba(17, 43, 46, 0.95);
   }
+
+  .mission-readout button small {
+    display: none;
+  }
 }
 
 @media (max-width: 430px) {
@@ -1175,7 +1345,8 @@ button {
 @media (prefers-reduced-motion: reduce) {
   .status-dot,
   .arena::before,
-  .reactor-status {
+  .reactor-status,
+  .mission-panel {
     animation: none;
   }
 
