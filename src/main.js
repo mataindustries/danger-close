@@ -86,7 +86,7 @@ app.innerHTML = `
       </div>
 
       <div id="performance-readout" class="performance-readout">
-        <span id="performance-values">FPS -- · EN 0 · BLT 0 · BP 0 · MN 0 · BX 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · FT --MS</span>
+        <span id="performance-values">FPS -- · EN 0 · BLT 0 · BP 0 · MN 0 · BX 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · VIS 0/0 · Q FULL · FT --MS</span>
         <b id="spike-indicator" class="spike-indicator" hidden>SPIKE</b>
       </div>
 
@@ -404,6 +404,7 @@ const MAX_EMP_RADIUS = 210
 const MAX_SIMULATION_DT = 1 / 30
 const SPIKE_THRESHOLD_MS = 80
 const SPIKE_INDICATOR_DURATION = 1.25
+const REDUCED_EFFECTS_RECOVERY_SECONDS = 2.8
 const SAVE_KEY = 'danger-close-save-v1'
 const SAVE_VERSION = 1
 const MAX_UPGRADE_RANK = 5
@@ -764,6 +765,8 @@ function createInitialState() {
     frameMs: 16.7,
     diagnosticsClock: 0,
     spikeTimer: 0,
+    effectsRecoveryClock: 0,
+    effectsModeTransitions: 0,
     spawnBacklog: 0,
     mission: {
       salvage: 0,
@@ -861,6 +864,7 @@ function clearResetConfirmation() {
 function showMainMenu() {
   state = createInitialState()
   state.mode = 'menu'
+  reducedEffects = false
   hideFrontScreens()
   ui.levelUp.hidden = true
   ui.mainMenu.hidden = false
@@ -915,6 +919,7 @@ function renderSectorSelect() {
 function showSectorSelect() {
   state = createInitialState()
   state.mode = 'sector'
+  reducedEffects = false
   hideFrontScreens()
   ui.levelUp.hidden = true
   ui.sectorSelect.hidden = false
@@ -945,6 +950,7 @@ function previewSector(sectorId) {
 function showHangar() {
   state = createInitialState()
   state.mode = 'hangar'
+  reducedEffects = false
   hideFrontScreens()
   ui.levelUp.hidden = true
   ui.hangar.hidden = false
@@ -963,7 +969,7 @@ function resetGame() {
   ui.levelUp.hidden = true
   ui.onboardingHint.classList.remove('is-hidden')
   ui.performanceValues.textContent =
-    'FPS -- · EN 0 · BLT 0 · BP 0 · MN 0 · BX 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · FT --MS'
+    'FPS -- · EN 0 · BLT 0 · BP 0 · MN 0 · BX 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · VIS 0/0 · Q FULL · FT --MS'
   ui.spikeIndicator.hidden = true
   ui.weaponConfirmation.textContent = ''
   ui.weaponConfirmation.classList.remove('is-visible')
@@ -1238,9 +1244,9 @@ function getVisualEffectCap(type) {
   return Math.floor(cap * (type === 'floatingTexts' ? 0.75 : 0.72))
 }
 
-function updateEffectBudget() {
+function updateEffectBudget(rawDt) {
   const performanceLoad =
-    state.fps < 50 || state.frameMs > 22 || state.spikeTimer > 0
+    state.fps < 48 || state.frameMs > 24 || state.spikeTimer > 0
   const surgeLoad =
     isReactorSurging() &&
     (performanceLoad ||
@@ -1248,7 +1254,7 @@ function updateEffectBudget() {
       state.particles.length >= getEntityCap('particles') * 0.55 ||
       state.bullets.length >= getEntityCap('bullets') * 0.65)
 
-  reducedEffects =
+  const pressure =
     performanceLoad ||
     surgeLoad ||
     state.enemies.length >= entityCaps.reducedEffectsEnemies ||
@@ -1257,6 +1263,36 @@ function updateEffectBudget() {
     state.bossProjectiles.length >= entityCaps.bossProjectiles * 0.8 ||
     state.bossEffects.length >= entityCaps.bossEffects * 0.8 ||
     state.pickups.length >= entityCaps.pickups * 0.65
+
+  if (pressure) {
+    if (!reducedEffects) state.effectsModeTransitions += 1
+    reducedEffects = true
+    state.effectsRecoveryClock = REDUCED_EFFECTS_RECOVERY_SECONDS
+    return
+  }
+
+  if (!reducedEffects) return
+  const safelyBelowBudget =
+    state.fps >= 55 &&
+    state.frameMs <= 19 &&
+    state.spikeTimer <= 0 &&
+    state.enemies.length < entityCaps.reducedEffectsEnemies * 0.78 &&
+    state.particles.length < entityCaps.particles * 0.55 &&
+    state.bullets.length < entityCaps.bullets * 0.6 &&
+    state.bossProjectiles.length < entityCaps.bossProjectiles * 0.6 &&
+    state.bossEffects.length < entityCaps.bossEffects * 0.6 &&
+    state.pickups.length < entityCaps.pickups * 0.5
+
+  if (!safelyBelowBudget) {
+    state.effectsRecoveryClock = REDUCED_EFFECTS_RECOVERY_SECONDS
+    return
+  }
+
+  state.effectsRecoveryClock -= Math.min(rawDt, 0.1)
+  if (state.effectsRecoveryClock <= 0) {
+    reducedEffects = false
+    state.effectsModeTransitions += 1
+  }
 }
 
 function updatePerformanceReadout(rawDt) {
@@ -1293,13 +1329,48 @@ function updatePerformanceReadout(rawDt) {
 
   if (state.diagnosticsClock >= 0.25) {
     state.diagnosticsClock = 0
+    let visibleEnemies = 0
+    for (const enemy of state.enemies) {
+      if (
+        !enemy.dead &&
+        enemy.x + enemy.radius >= 0 &&
+        enemy.x - enemy.radius <= width &&
+        enemy.y + enemy.radius >= 0 &&
+        enemy.y - enemy.radius <= height
+      ) {
+        visibleEnemies += 1
+      }
+    }
+    const titan = state.titan.status === 'active' ? state.titan.boss : null
+    if (
+      titan &&
+      titan.x + titan.radius >= 0 &&
+      titan.x - titan.radius <= width &&
+      titan.y + titan.radius >= 0 &&
+      titan.y - titan.radius <= height
+    ) {
+      visibleEnemies += 1
+    }
+    let visiblePickups = 0
+    for (const pickup of state.pickups) {
+      if (
+        !pickup.collected &&
+        pickup.x + pickup.radius >= 0 &&
+        pickup.x - pickup.radius <= width &&
+        pickup.y + pickup.radius >= 0 &&
+        pickup.y - pickup.radius <= height
+      ) {
+        visiblePickups += 1
+      }
+    }
     ui.performanceValues.textContent =
       `FPS ${Math.round(state.fps)} · EN ${state.enemies.length} · ` +
       `BLT ${state.bullets.length} · BP ${state.bossProjectiles.length} · ` +
       `MN ${state.bossMines.length} · BX ${state.bossEffects.length} · ` +
       `PCK ${state.pickups.length} · ` +
       `PRT ${state.particles.length} · TXT ${state.floatingTexts.length} · ` +
-      `FX ${state.rings.length} · FT ${state.frameMs.toFixed(1)}MS`
+      `FX ${state.rings.length} · VIS ${visibleEnemies}/${visiblePickups} · ` +
+      `Q ${reducedEffects ? 'LOW' : 'FULL'} · FT ${state.frameMs.toFixed(1)}MS`
   }
 }
 
@@ -3365,7 +3436,7 @@ function updatePickups(dt) {
     if (pickup.collected) continue
     const resource = resourceTypes[pickup.type]
     pickup.age += dt
-    pickup.phase += dt * (pickup.type === 'reactor' ? 5 : 3.5)
+    pickup.phase += dt * (pickup.type === 'reactor' ? 2.4 : 1.9)
     pickup.vx *= Math.pow(0.08, dt)
     pickup.vy *= Math.pow(0.08, dt)
     pickup.x += pickup.vx * dt
@@ -3398,17 +3469,16 @@ function updatePickups(dt) {
   let writeIndex = 0
   for (let index = 0; index < pickups.length; index += 1) {
     const pickup = pickups[index]
-    const isEssential =
-      pickup.type === 'battery' || pickup.type === 'reactor'
-    const lifetime =
-      reducedEffects && !isEssential ? 14 : PICKUP_LIFETIME
-    if (!pickup.collected && pickup.age < lifetime) {
+    if (!pickup.collected && pickup.age < PICKUP_LIFETIME) {
       pickups[writeIndex] = pickup
       writeIndex += 1
     }
   }
   pickups.length = writeIndex
-  trimOldestInPlace(pickups, getEntityCap('pickups'))
+  // A surge lowers the spawn budget, but existing salvage remains in the
+  // world. Trimming only to the device hard cap prevents visible pickups from
+  // popping out when the performance profile changes mid-run.
+  trimOldestInPlace(pickups, entityCaps.pickups)
 }
 
 function updateEffects(dt) {
@@ -3528,12 +3598,12 @@ function drawSectorAtmosphere() {
     ctx.save()
     ctx.lineWidth = 1.4
     ctx.shadowColor = '#64d5ff'
-    ctx.shadowBlur = 7
+    ctx.shadowBlur = 4
     for (const arc of sectorArcs) {
       const charge =
         (Math.sin(state.elapsed * arc.speed * 3.2 + arc.phase) + 1) * 0.5
-      if (charge < 0.74) continue
-      ctx.globalAlpha = (charge - 0.74) * 1.65
+      if (charge < 0.78) continue
+      ctx.globalAlpha = (charge - 0.78) * 1.1
       ctx.strokeStyle = '#79dcff'
       ctx.beginPath()
       for (let index = 0; index < arc.points.length; index += 1) {
@@ -3578,8 +3648,9 @@ function drawBackground() {
 
   if (!reducedEffects) {
     for (const glow of ambientGlows) {
-      const flicker = 0.55 + Math.sin(state.elapsed * 0.75 + glow.phase) * 0.3
-      ctx.globalAlpha = flicker
+      const glowStrength =
+        0.62 + Math.sin(state.elapsed * 0.55 + glow.phase) * 0.12
+      ctx.globalAlpha = glowStrength
       ctx.drawImage(
         glow.sprite,
         glow.x - glow.diameter / 2,
@@ -3600,7 +3671,8 @@ function drawBackground() {
     const dustY =
       (dust.y + state.elapsed * dust.speed * 0.34 + Math.cos(state.elapsed * 0.7 + dust.phase) * 5) %
       height
-    ctx.globalAlpha = dust.opacity * (0.7 + Math.sin(state.elapsed * 1.2 + dust.phase) * 0.3)
+    ctx.globalAlpha =
+      dust.opacity * (0.82 + Math.sin(state.elapsed * 0.72 + dust.phase) * 0.18)
     ctx.fillStyle = visual.dustColor
     ctx.fillRect(dustX, dustY, dust.size * 2.2, dust.size)
   }
@@ -3610,16 +3682,11 @@ function drawBackground() {
 }
 
 function drawPickup(pickup) {
-  if (pickup.age > PICKUP_LIFETIME - 2 && Math.floor(pickup.age * 8) % 2 === 0) {
-    return
-  }
-  const bob = Math.sin(pickup.phase) * 3
-  if (reducedEffects) {
-    drawSimplifiedPickup(pickup, bob)
-    return
-  }
-  const pulseAmount = pickup.type === 'reactor' ? 0.16 : 0.1
-  const pulse = 1 + Math.sin(pickup.phase * 1.6) * pulseAmount
+  const bobAmount = pickup.type === 'scrap' ? 1.2 : 2
+  const bob = Math.sin(pickup.phase) * bobAmount
+  const pulseAmount =
+    pickup.type === 'reactor' ? 0.07 : pickup.type === 'scrap' ? 0 : 0.025
+  const pulse = 1 + Math.sin(pickup.phase * 1.15) * pulseAmount
 
   ctx.save()
   ctx.translate(pickup.x, pickup.y + bob)
@@ -3633,46 +3700,19 @@ function drawPickup(pickup) {
   ctx.restore()
 }
 
-function drawSimplifiedPickup(pickup, bob) {
-  ctx.save()
-  ctx.translate(pickup.x, pickup.y + bob)
-  ctx.fillStyle = resourceTypes[pickup.type].color
-  ctx.strokeStyle =
-    pickup.type === 'scrap' ? '#dce5e4' : 'rgba(220, 255, 255, 0.8)'
-  ctx.lineWidth = 1
-
-  if (pickup.type === 'reactor') {
-    ctx.beginPath()
-    ctx.arc(0, 0, 11, 0, TAU)
-    ctx.fill()
-    ctx.stroke()
-    ctx.fillStyle = '#ff5a36'
-    ctx.beginPath()
-    ctx.arc(0, 0, 4, 0, TAU)
-    ctx.fill()
-  } else {
-    if (pickup.type === 'scrap') ctx.rotate(pickup.phase * 0.18)
-    const halfWidth = pickup.type === 'battery' ? 7 : 8
-    const halfHeight = pickup.type === 'battery' ? 10 : 7
-    ctx.fillRect(-halfWidth, -halfHeight, halfWidth * 2, halfHeight * 2)
-    ctx.strokeRect(-halfWidth, -halfHeight, halfWidth * 2, halfHeight * 2)
-  }
-  ctx.restore()
-}
-
 function drawPickupAura(color, radius, phase, beacon = true) {
   ctx.shadowColor = color
-  ctx.shadowBlur = reducedEffects ? 0 : radius
+  ctx.shadowBlur = reducedEffects ? 0 : Math.min(10, radius * 0.4)
   ctx.fillStyle = color
-  ctx.globalAlpha = 0.16
+  ctx.globalAlpha = 0.1
   ctx.beginPath()
   ctx.arc(0, 0, radius, 0, TAU)
   ctx.fill()
-  ctx.globalAlpha = 0.5
+  ctx.globalAlpha = 0.36
   ctx.strokeStyle = color
   ctx.lineWidth = 1
   ctx.beginPath()
-  ctx.arc(0, 0, radius * 0.72 + Math.sin(phase * 1.8) * 2, 0, TAU)
+  ctx.arc(0, 0, radius * 0.72 + Math.sin(phase * 1.1) * 1.2, 0, TAU)
   ctx.stroke()
 
   if (beacon) {
@@ -3683,86 +3723,95 @@ function drawPickupAura(color, radius, phase, beacon = true) {
 }
 
 function drawGpuPickup(pickup) {
-  drawPickupAura('#63ff91', 23, pickup.phase)
+  drawPickupAura('#63ff91', 22, pickup.phase)
   ctx.shadowColor = '#63ff91'
-  ctx.shadowBlur = reducedEffects ? 0 : 10
-  ctx.fillStyle = '#68f78e'
-  ctx.fillRect(-8, -7, 16, 14)
+  ctx.shadowBlur = reducedEffects ? 0 : 6
+  ctx.fillStyle = '#182c22'
+  ctx.fillRect(-9, -8, 18, 16)
+  ctx.fillStyle = '#5ce984'
+  ctx.fillRect(-7, -6, 14, 12)
   ctx.shadowBlur = 0
-  ctx.fillStyle = '#133c29'
+  ctx.fillStyle = '#123a27'
   ctx.fillRect(-4, -3, 8, 6)
-  ctx.strokeStyle = '#b9ffc9'
-  ctx.lineWidth = 1
-  ctx.strokeRect(-8, -7, 16, 14)
+  ctx.strokeStyle = '#c3ffd1'
+  ctx.lineWidth = 1.25
+  ctx.strokeRect(-9, -8, 18, 16)
 
   for (let i = -6; i <= 6; i += 4) {
-    ctx.fillStyle = '#9dffb5'
-    ctx.fillRect(i, -10, 2, 3)
-    ctx.fillRect(i, 7, 2, 3)
+    ctx.fillStyle = '#a7ffba'
+    ctx.fillRect(i, -11, 2, 3)
+    ctx.fillRect(i, 8, 2, 3)
   }
 }
 
 function drawBatteryPickup(pickup) {
-  drawPickupAura('#58cfff', 24, pickup.phase)
+  drawPickupAura('#58cfff', 23, pickup.phase)
   ctx.shadowColor = '#6ad7ff'
-  ctx.shadowBlur = reducedEffects ? 0 : 13
-  ctx.fillStyle = '#4ebdeb'
-  ctx.fillRect(-8, -11, 16, 23)
+  ctx.shadowBlur = reducedEffects ? 0 : 7
+  ctx.fillStyle = '#163745'
+  ctx.fillRect(-9, -12, 18, 24)
+  ctx.fillStyle = '#42b9eb'
+  ctx.fillRect(-7, -10, 14, 20)
   ctx.fillStyle = '#a8ebff'
-  ctx.fillRect(-4, -14, 8, 3)
+  ctx.fillRect(-4, -15, 8, 3)
   ctx.shadowBlur = 0
-  ctx.fillStyle = '#0a2f43'
-  ctx.fillRect(-5, -8, 10, 17)
-  ctx.fillStyle = '#7ddfff'
-  ctx.fillRect(-3, 1, 6, 6)
+  ctx.fillStyle = '#092d3f'
+  ctx.fillRect(-4, -7, 8, 14)
+  ctx.fillStyle = '#68d8ff'
+  ctx.fillRect(-3, 2, 6, 5)
   ctx.fillStyle = '#d8f7ff'
-  ctx.fillRect(-1, -6, 2, 5)
+  ctx.fillRect(-1, -6, 2, 6)
   ctx.fillRect(-3, -4, 6, 2)
   ctx.strokeStyle = '#c6f3ff'
-  ctx.lineWidth = 1
-  ctx.strokeRect(-8, -11, 16, 23)
+  ctx.lineWidth = 1.25
+  ctx.strokeRect(-9, -12, 18, 24)
 }
 
 function drawScrapPickup(pickup) {
   ctx.save()
-  ctx.rotate(pickup.phase * 0.18)
+  ctx.rotate(pickup.phase * 0.12)
   ctx.shadowColor = '#f0a056'
-  ctx.shadowBlur = reducedEffects ? 0 : 11
-  ctx.fillStyle = 'rgba(226, 151, 73, 0.15)'
+  ctx.shadowBlur = reducedEffects ? 0 : 5
+  ctx.fillStyle = 'rgba(226, 151, 73, 0.1)'
   ctx.beginPath()
-  ctx.arc(0, 0, 17, 0, TAU)
+  ctx.arc(0, 0, 16, 0, TAU)
   ctx.fill()
-  ctx.fillStyle = '#8c9797'
-  ctx.strokeStyle = '#f0a056'
+  ctx.fillStyle = '#858f8e'
+  ctx.strokeStyle = '#f2a45a'
   ctx.lineWidth = 2
   ctx.beginPath()
-  ctx.moveTo(-11, -4)
-  ctx.lineTo(-2, -11)
-  ctx.lineTo(10, -7)
-  ctx.lineTo(6, 1)
-  ctx.lineTo(11, 8)
-  ctx.lineTo(-4, 10)
+  ctx.moveTo(-12, -4)
+  ctx.lineTo(-3, -11)
+  ctx.lineTo(10, -8)
+  ctx.lineTo(7, 0)
+  ctx.lineTo(11, 7)
+  ctx.lineTo(-3, 10)
+  ctx.lineTo(-9, 5)
   ctx.closePath()
   ctx.fill()
   ctx.stroke()
   ctx.shadowBlur = 0
-  ctx.strokeStyle = '#d5dddd'
+  ctx.fillStyle = '#c9d1cf'
+  ctx.fillRect(-7, -5, 3, 3)
+  ctx.fillStyle = '#4c5555'
+  ctx.fillRect(5, 4, 2, 2)
+  ctx.strokeStyle = '#dce3e1'
   ctx.lineWidth = 1
   ctx.beginPath()
-  ctx.moveTo(-5, -5)
-  ctx.lineTo(4, 5)
-  ctx.lineTo(8, 3)
+  ctx.moveTo(-2, -7)
+  ctx.lineTo(3, 5)
+  ctx.lineTo(8, 1)
   ctx.stroke()
   ctx.restore()
 }
 
 function drawReactorPickup(pickup) {
-  drawPickupAura('#ff9e32', 30, pickup.phase)
+  drawPickupAura('#ff9e32', 27, pickup.phase)
   ctx.save()
-  ctx.rotate(pickup.phase * 0.35)
+  ctx.rotate(pickup.phase * 0.22)
   ctx.shadowColor = '#ff5a32'
-  ctx.shadowBlur = reducedEffects ? 0 : 18
-  ctx.fillStyle = '#671d17'
+  ctx.shadowBlur = reducedEffects ? 0 : 8
+  ctx.fillStyle = '#551a16'
   ctx.strokeStyle = '#ffb13b'
   ctx.lineWidth = 2
   ctx.beginPath()
@@ -3783,7 +3832,7 @@ function drawReactorPickup(pickup) {
   ctx.restore()
 
   ctx.shadowColor = '#ffe16a'
-  ctx.shadowBlur = reducedEffects ? 6 : 18
+  ctx.shadowBlur = reducedEffects ? 3 : 9
   ctx.fillStyle = '#ffe36b'
   ctx.beginPath()
   ctx.arc(0, 0, 5.5, 0, TAU)
@@ -3797,7 +3846,6 @@ function drawReactorPickup(pickup) {
 
 function drawTitanMines() {
   for (const mine of state.bossMines) {
-    if (mine.life < 1.2 && Math.floor(mine.life * 10) % 2 === 0) continue
     const pulse = (Math.sin(mine.phase) + 1) * 0.5
     ctx.save()
     ctx.translate(mine.x, mine.y)
@@ -3825,7 +3873,7 @@ function drawTitanMines() {
     }
     ctx.shadowColor = '#ff9a42'
     ctx.shadowBlur = reducedEffects ? 0 : 10
-    ctx.fillStyle = pulse > 0.45 ? '#ffc15a' : '#ff6339'
+    ctx.fillStyle = '#ff9a43'
     ctx.beginPath()
     ctx.arc(0, 0, 5 + pulse * 2, 0, TAU)
     ctx.fill()
@@ -3904,7 +3952,7 @@ function drawHarvesterTitan() {
   ctx.fillRect(-radius * 0.72, radius * 0.5, radius * 1.14, radius * 0.3)
   ctx.strokeRect(-radius * 0.72, radius * 0.5, radius * 1.14, radius * 0.3)
 
-  ctx.fillStyle = boss.flash > 0 ? '#f6e4c5' : '#24292a'
+  ctx.fillStyle = '#24292a'
   ctx.strokeStyle = boss.flash > 0 ? '#fff4d8' : '#b24a30'
   ctx.beginPath()
   ctx.moveTo(radius * 0.76, 0)
@@ -3979,142 +4027,193 @@ function drawTitanEffects() {
 function drawEnemyHealthBar(enemy, healthRatio) {
   if (healthRatio >= 0.98 || healthRatio <= 0) return
   const barWidth = enemy.radius * 1.7
+  const barX = Math.round(enemy.x - barWidth / 2)
+  const barY = Math.round(enemy.y - enemy.radius - 10)
   ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'
-  ctx.fillRect(
-    enemy.x - barWidth / 2,
-    enemy.y - enemy.radius - 10,
-    barWidth,
-    3,
-  )
+  ctx.fillRect(barX, barY, barWidth, 3)
   ctx.fillStyle = enemy.color
-  ctx.fillRect(
-    enemy.x - barWidth / 2,
-    enemy.y - enemy.radius - 10,
-    barWidth * healthRatio,
-    3,
-  )
+  ctx.fillRect(barX, barY, Math.max(1, barWidth * healthRatio), 3)
+}
+
+function drawScavengerEnemy(enemy) {
+  const radius = enemy.radius
+  ctx.fillStyle = '#241d1b'
+  ctx.beginPath()
+  ctx.moveTo(radius * 0.82, 0)
+  ctx.lineTo(radius * 0.48, radius * 0.58)
+  ctx.lineTo(-radius * 0.52, radius * 0.62)
+  ctx.lineTo(-radius * 0.78, radius * 0.3)
+  ctx.lineTo(-radius * 0.78, -radius * 0.3)
+  ctx.lineTo(-radius * 0.52, -radius * 0.62)
+  ctx.lineTo(radius * 0.48, -radius * 0.58)
+  ctx.closePath()
+  ctx.fill()
+  ctx.stroke()
+
+  ctx.fillStyle = '#111516'
+  ctx.fillRect(-radius * 0.78, -radius * 0.72, radius * 0.3, radius * 0.28)
+  ctx.fillRect(-radius * 0.78, radius * 0.44, radius * 0.3, radius * 0.28)
+  ctx.strokeStyle = '#6f3930'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(-radius * 0.34, -radius * 0.42)
+  ctx.lineTo(-radius * 0.34, radius * 0.42)
+  ctx.moveTo(radius * 0.08, -radius * 0.5)
+  ctx.lineTo(radius * 0.08, radius * 0.5)
+  ctx.stroke()
+}
+
+function drawScoutEnemy(enemy) {
+  const radius = enemy.radius
+  ctx.fillStyle = '#20201d'
+  ctx.beginPath()
+  ctx.moveTo(radius * 1.12, 0)
+  ctx.lineTo(-radius * 0.3, radius * 0.76)
+  ctx.lineTo(-radius * 0.12, radius * 0.25)
+  ctx.lineTo(-radius * 0.96, radius * 0.12)
+  ctx.lineTo(-radius * 0.96, -radius * 0.12)
+  ctx.lineTo(-radius * 0.12, -radius * 0.25)
+  ctx.lineTo(-radius * 0.3, -radius * 0.76)
+  ctx.closePath()
+  ctx.fill()
+  ctx.stroke()
+
+  ctx.strokeStyle = '#87502f'
+  ctx.lineWidth = 1.5
+  ctx.beginPath()
+  ctx.moveTo(-radius * 0.24, radius * 0.42)
+  ctx.lineTo(-radius * 0.82, radius * 0.86)
+  ctx.moveTo(-radius * 0.24, -radius * 0.42)
+  ctx.lineTo(-radius * 0.82, -radius * 0.86)
+  ctx.stroke()
+}
+
+function drawHeavyEnemy(enemy) {
+  const radius = enemy.radius
+  ctx.fillStyle = '#101415'
+  ctx.fillRect(-radius * 0.82, -radius * 0.82, radius * 0.4, radius * 1.64)
+  ctx.fillRect(radius * 0.4, -radius * 0.82, radius * 0.4, radius * 1.64)
+
+  ctx.fillStyle = '#2b211e'
+  ctx.beginPath()
+  ctx.moveTo(radius * 0.74, -radius * 0.46)
+  ctx.lineTo(radius * 0.74, radius * 0.46)
+  ctx.lineTo(radius * 0.44, radius * 0.7)
+  ctx.lineTo(-radius * 0.6, radius * 0.7)
+  ctx.lineTo(-radius * 0.78, radius * 0.42)
+  ctx.lineTo(-radius * 0.78, -radius * 0.42)
+  ctx.lineTo(-radius * 0.6, -radius * 0.7)
+  ctx.lineTo(radius * 0.44, -radius * 0.7)
+  ctx.closePath()
+  ctx.fill()
+  ctx.stroke()
+
+  ctx.strokeStyle = '#7e3931'
+  ctx.lineWidth = 1.5
+  ctx.strokeRect(-radius * 0.38, -radius * 0.5, radius * 0.66, radius)
+  ctx.beginPath()
+  ctx.moveTo(-radius * 0.7, 0)
+  ctx.lineTo(-radius * 0.4, 0)
+  ctx.stroke()
+}
+
+function drawReclaimerEnemy(enemy) {
+  const radius = enemy.radius
+  ctx.strokeStyle = enemy.flash > 0 ? '#ffd9b5' : '#d95778'
+  ctx.lineWidth = enemy.flash > 0 ? 2.6 : 2
+  for (const side of [-1, 1]) {
+    ctx.beginPath()
+    ctx.moveTo(-radius * 0.24, side * radius * 0.48)
+    ctx.lineTo(-radius * 0.66, side * radius * 0.9)
+    ctx.lineTo(-radius * 1.02, side * radius * 0.7)
+    ctx.lineTo(-radius * 0.82, side * radius * 0.56)
+    ctx.stroke()
+  }
+
+  ctx.fillStyle = '#261a20'
+  ctx.beginPath()
+  ctx.moveTo(radius * 0.98, 0)
+  ctx.lineTo(radius * 0.48, radius * 0.72)
+  ctx.lineTo(-radius * 0.66, radius * 0.62)
+  ctx.lineTo(-radius * 0.96, radius * 0.24)
+  ctx.lineTo(-radius * 0.96, -radius * 0.24)
+  ctx.lineTo(-radius * 0.66, -radius * 0.62)
+  ctx.lineTo(radius * 0.48, -radius * 0.72)
+  ctx.closePath()
+  ctx.fill()
+  ctx.stroke()
+
+  ctx.fillStyle = '#101416'
+  ctx.fillRect(-radius * 0.62, -radius * 0.36, radius * 0.46, radius * 0.72)
+  ctx.strokeStyle = '#8e304e'
+  ctx.lineWidth = 1.5
+  ctx.strokeRect(-radius * 0.02, -radius * 0.52, radius * 0.38, radius * 1.04)
+  ctx.beginPath()
+  ctx.moveTo(radius * 0.46, -radius * 0.44)
+  ctx.lineTo(radius * 0.72, 0)
+  ctx.lineTo(radius * 0.46, radius * 0.44)
+  ctx.stroke()
+}
+
+function drawEnemyCore(enemy) {
+  const radius = enemy.radius
+  const coreColor =
+    enemy.type === 'reclaimer'
+      ? '#ff5d83'
+      : enemy.type === 'scout'
+        ? '#ffb052'
+        : enemy.type === 'heavy'
+          ? '#ff633d'
+          : '#ff7942'
+  ctx.shadowColor = coreColor
+  ctx.shadowBlur = reducedEffects ? 0 : enemy.type === 'reclaimer' ? 8 : 5
+  ctx.fillStyle = coreColor
+
+  if (enemy.type === 'reclaimer') {
+    ctx.beginPath()
+    ctx.arc(radius * 0.3, 0, radius * 0.16, 0, TAU)
+    ctx.fill()
+    ctx.strokeStyle = '#ffc078'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.arc(radius * 0.3, 0, radius * 0.24, 0, TAU)
+    ctx.stroke()
+  } else if (enemy.type === 'scout') {
+    ctx.beginPath()
+    ctx.moveTo(radius * 0.52, 0)
+    ctx.lineTo(radius * 0.12, radius * 0.2)
+    ctx.lineTo(radius * 0.12, -radius * 0.2)
+    ctx.closePath()
+    ctx.fill()
+  } else {
+    const coreHeight = enemy.type === 'heavy' ? 7 : 5
+    ctx.fillRect(
+      radius * 0.08,
+      -coreHeight / 2,
+      radius * 0.5,
+      coreHeight,
+    )
+  }
+  ctx.shadowBlur = 0
 }
 
 function drawEnemy(enemy) {
+  if (enemy.dead) return
   const healthRatio = Math.max(0, enemy.health / enemy.maxHealth)
-  if (reducedEffects) {
-    ctx.save()
-    ctx.translate(enemy.x, enemy.y)
-    ctx.rotate(enemy.angle)
-    ctx.fillStyle = enemy.flash > 0 ? '#fff1d1' : '#251d1c'
-    ctx.strokeStyle = enemy.flash > 0 ? '#fff3dc' : enemy.color
-    ctx.lineWidth = 2
-    if (enemy.type === 'reclaimer') {
-      const radius = enemy.radius
-      ctx.beginPath()
-      ctx.moveTo(radius * 0.9, 0)
-      ctx.lineTo(radius * 0.35, radius * 0.72)
-      ctx.lineTo(-radius * 0.8, radius * 0.58)
-      ctx.lineTo(-radius, 0)
-      ctx.lineTo(-radius * 0.8, -radius * 0.58)
-      ctx.lineTo(radius * 0.35, -radius * 0.72)
-      ctx.closePath()
-      ctx.fill()
-      ctx.stroke()
-    } else if (enemy.type === 'scout') {
-      ctx.beginPath()
-      ctx.moveTo(13, 0)
-      ctx.lineTo(-11, 9)
-      ctx.lineTo(-11, -9)
-      ctx.closePath()
-      ctx.fill()
-      ctx.stroke()
-    } else {
-      const radius = enemy.radius
-      ctx.fillRect(-radius * 0.7, -radius * 0.58, radius * 1.35, radius * 1.16)
-      ctx.strokeRect(-radius * 0.7, -radius * 0.58, radius * 1.35, radius * 1.16)
-    }
-    ctx.fillStyle = '#ffcf70'
-    ctx.fillRect(enemy.radius * 0.18, -2, enemy.radius * 0.5, 4)
-    ctx.restore()
-    drawEnemyHealthBar(enemy, healthRatio)
-    return
-  }
-
   ctx.save()
   ctx.translate(enemy.x, enemy.y)
   ctx.rotate(enemy.angle)
-
-  ctx.shadowColor = enemy.color
-  ctx.shadowBlur = enemy.flash > 0 ? (reducedEffects ? 8 : 22) : (reducedEffects ? 0 : 7)
-  ctx.strokeStyle = enemy.flash > 0 ? '#fff3dc' : enemy.color
-  ctx.fillStyle = enemy.flash > 0 ? '#fff1d1' : '#251d1c'
-  ctx.lineWidth = 2
-
-  if (enemy.type === 'reclaimer') {
-    const radius = enemy.radius
-    for (const side of [-1, 1]) {
-      ctx.beginPath()
-      ctx.moveTo(-radius * 0.35, side * radius * 0.48)
-      ctx.lineTo(-radius * 0.72, side * radius * 0.9)
-      ctx.lineTo(-radius * 0.98, side * radius * 0.72)
-      ctx.stroke()
-    }
-    ctx.beginPath()
-    ctx.moveTo(radius * 0.92, 0)
-    ctx.lineTo(radius * 0.42, radius * 0.7)
-    ctx.lineTo(-radius * 0.72, radius * 0.6)
-    ctx.lineTo(-radius, radius * 0.2)
-    ctx.lineTo(-radius, -radius * 0.2)
-    ctx.lineTo(-radius * 0.72, -radius * 0.6)
-    ctx.lineTo(radius * 0.42, -radius * 0.7)
-    ctx.closePath()
-    ctx.fill()
-    ctx.stroke()
-    ctx.fillStyle = '#15191c'
-    ctx.fillRect(-radius * 0.62, -radius * 0.38, radius * 0.5, radius * 0.76)
-    ctx.strokeStyle = '#8c304c'
-    ctx.strokeRect(-radius * 0.06, -radius * 0.56, radius * 0.42, radius * 1.12)
-  } else if (enemy.type === 'scout') {
-    for (const side of [-1, 1]) {
-      ctx.beginPath()
-      ctx.moveTo(-8, side * 7)
-      ctx.lineTo(-17, side * (12 + Math.sin(enemy.phase) * 3))
-      ctx.lineTo(-12, side * 17)
-      ctx.stroke()
-      ctx.beginPath()
-      ctx.moveTo(5, side * 8)
-      ctx.lineTo(14, side * (13 - Math.sin(enemy.phase) * 3))
-      ctx.lineTo(11, side * 18)
-      ctx.stroke()
-    }
-    ctx.beginPath()
-    ctx.moveTo(13, 0)
-    ctx.lineTo(5, 10)
-    ctx.lineTo(-10, 8)
-    ctx.lineTo(-13, 0)
-    ctx.lineTo(-10, -8)
-    ctx.lineTo(5, -10)
-    ctx.closePath()
-    ctx.fill()
-    ctx.stroke()
-  } else {
-    const radius = enemy.radius
-    ctx.fillRect(-radius * 0.72, -radius * 0.62, radius * 1.4, radius * 1.24)
-    ctx.strokeRect(-radius * 0.72, -radius * 0.62, radius * 1.4, radius * 1.24)
-    ctx.fillStyle = '#121516'
-    ctx.fillRect(-radius * 0.88, -radius * 0.86, radius * 0.42, radius * 0.42)
-    ctx.fillRect(-radius * 0.88, radius * 0.44, radius * 0.42, radius * 0.42)
-    ctx.fillRect(radius * 0.45, -radius * 0.86, radius * 0.42, radius * 0.42)
-    ctx.fillRect(radius * 0.45, radius * 0.44, radius * 0.42, radius * 0.42)
-    if (enemy.type === 'heavy') {
-      ctx.strokeStyle = '#7e3931'
-      ctx.strokeRect(-radius * 0.42, -radius * 0.88, radius * 0.82, radius * 1.76)
-    }
-  }
-
-  ctx.fillStyle = '#ffcf70'
-  ctx.shadowColor = '#ff8c43'
-  ctx.shadowBlur = reducedEffects ? 0 : 12
-  ctx.fillRect(enemy.radius * 0.18, -3, enemy.radius * 0.58, 6)
   ctx.shadowBlur = 0
-  ctx.restore()
+  ctx.strokeStyle = enemy.flash > 0 ? '#ffd9ad' : enemy.color
+  ctx.lineWidth = enemy.flash > 0 ? 2.6 : 2
 
+  if (enemy.type === 'reclaimer') drawReclaimerEnemy(enemy)
+  else if (enemy.type === 'scout') drawScoutEnemy(enemy)
+  else if (enemy.type === 'heavy') drawHeavyEnemy(enemy)
+  else drawScavengerEnemy(enemy)
+
+  drawEnemyCore(enemy)
+  ctx.restore()
   drawEnemyHealthBar(enemy, healthRatio)
 }
 
@@ -4189,12 +4288,20 @@ function drawPlayer() {
   const player = state.player
   const surged = isReactorSurging()
   const tilt = player.moveX * 0.07
-  const hitVisible = player.hitCooldown <= 0 || Math.floor(player.hitCooldown * 18) % 2 === 0
-  if (!hitVisible) return
 
   ctx.save()
   ctx.translate(player.x, player.y)
   ctx.rotate(player.angle + tilt)
+
+  if (player.hitCooldown > 0) {
+    ctx.globalAlpha = 0.3
+    ctx.strokeStyle = '#ff7767'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(0, 0, player.radius + 7, 0, TAU)
+    ctx.stroke()
+    ctx.globalAlpha = 1
+  }
 
   if (player.shield > 0) {
     const shieldRatio = player.shield / player.maxShield
@@ -4231,6 +4338,11 @@ function drawPlayer() {
   ctx.fill()
   ctx.globalAlpha = 1
   ctx.shadowBlur = 0
+
+  ctx.fillStyle = 'rgba(3, 8, 10, 0.88)'
+  ctx.beginPath()
+  ctx.ellipse(0, 0, 24, 16, 0, 0, TAU)
+  ctx.fill()
 
   // Rotor arms and animated rotor discs.
   ctx.strokeStyle = '#709296'
@@ -4450,10 +4562,14 @@ function drawTouchControl() {
 
 function render() {
   drawBackground()
+  // Gameplay layers keep a fixed order so fallback detail changes never alter
+  // which objects cover pickups, hostiles, projectiles, or the player.
+  drawSurgePulse()
   ctx.save()
   const shakeX = state.shake ? (Math.random() - 0.5) * state.shake : 0
   const shakeY = state.shake ? (Math.random() - 0.5) * state.shake : 0
   ctx.translate(shakeX, shakeY)
+  drawExtractionBeacon()
   state.pickups.forEach(drawPickup)
   drawTitanMines()
   state.enemies.forEach(drawEnemy)
@@ -4461,13 +4577,11 @@ function render() {
   drawTitanProjectiles()
   drawBullets()
   drawOrbitDrones()
-  drawExtractionBeacon()
   drawPlayer()
-  drawSurgePulse()
   drawTitanEffects()
   drawEffects()
-  drawTouchControl()
   ctx.restore()
+  drawTouchControl()
   drawExtractionBorder()
 
   if (state.warningFlash > 0) {
@@ -4484,7 +4598,7 @@ function gameLoop(now) {
   const rawDt = Math.max(0, (now - lastFrame) / 1000)
   lastFrame = now
   updatePerformanceReadout(rawDt)
-  updateEffectBudget()
+  updateEffectBudget(rawDt)
   // Simulation work is bounded after a slow frame. Spawners and EMP only get
   // one update, so a stall cannot release a catch-up burst.
   const dt = Math.min(rawDt, MAX_SIMULATION_DT)
