@@ -86,7 +86,7 @@ app.innerHTML = `
       </div>
 
       <div id="performance-readout" class="performance-readout">
-        <span id="performance-values">FPS -- · EN 0 · BLT 0 · BP 0 · MN 0 · BX 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · VIS 0/0 · Q FULL · FT --MS</span>
+        <span id="performance-values">FPS -- · EN 0 · OBS 0 · BLT 0 · BP 0 · MN 0 · BX 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · VIS 0/0 · Q FULL · FT --MS</span>
         <b id="spike-indicator" class="spike-indicator" hidden>SPIKE</b>
       </div>
 
@@ -427,6 +427,7 @@ const SURGE_FIRE_INTERVAL_MULTIPLIER = 0.7
 const SURGE_MIN_FIRE_INTERVAL = 0.18
 const SURGE_SPAWN_INTERVAL_MULTIPLIER = 0.94
 const PICKUP_LIFETIME = 20
+const MAX_OBSTACLES = 12
 let entityCaps = DESKTOP_CAPS
 
 const sectors = [
@@ -438,6 +439,7 @@ const sectors = [
     description:
       'A cracked industrial salvage field with predictable swarm pressure.',
     modifiers: [
+      'Destructible scrap barricades',
       'Standard enemy pressure',
       'Balanced salvage drops',
       '220 salvage extraction target',
@@ -453,6 +455,11 @@ const sectors = [
       surgeDurationBonus: 0,
       dropMultipliers: {},
       rewardBonus: { scrap: 0, gpu: 0, reactor: 0 },
+    },
+    obstacles: {
+      type: 'scrap-barricade',
+      minCount: 6,
+      maxCount: 9,
     },
     visual: {
       seed: 7307,
@@ -476,6 +483,7 @@ const sectors = [
     description:
       'An abandoned EV storage field lit by unstable cells and blue discharge.',
     modifiers: [
+      'Unstable battery pylons',
       'EV battery drops increased',
       '+5 starting shield',
       'Scout bots appear more often',
@@ -492,6 +500,11 @@ const sectors = [
       surgeDurationBonus: 0,
       dropMultipliers: { battery: 2.2 },
       rewardBonus: { scrap: 12, gpu: 0, reactor: 0 },
+    },
+    obstacles: {
+      type: 'battery-pylon',
+      minCount: 7,
+      maxCount: 10,
     },
     visual: {
       seed: 12457,
@@ -515,6 +528,7 @@ const sectors = [
     description:
       'A poisoned power sector where unstable cores feed an aggressive swarm.',
     modifiers: [
+      'Volatile reactor vents',
       'Reactor core drops increased',
       'Reactor Surge lasts +2 seconds',
       'Enemy pressure increased',
@@ -531,6 +545,11 @@ const sectors = [
       surgeDurationBonus: 2,
       dropMultipliers: { reactor: 2.1 },
       rewardBonus: { scrap: 0, gpu: 0, reactor: 1 },
+    },
+    obstacles: {
+      type: 'reactor-vent',
+      minCount: 8,
+      maxCount: 11,
     },
     visual: {
       seed: 20873,
@@ -723,6 +742,34 @@ const resourceTypes = {
   reactor: { radius: 14, magnetRadius: 205, color: '#ffb13b' },
 }
 
+const obstacleTypes = {
+  'scrap-barricade': {
+    health: 105,
+    minRadius: 25,
+    maxRadius: 31,
+    label: 'SCRAP BREACH',
+    effectColor: '#e48a43',
+  },
+  'battery-pylon': {
+    health: 82,
+    minRadius: 22,
+    maxRadius: 27,
+    label: 'BATTERY DISCHARGE',
+    effectColor: '#55cfff',
+    burstRadius: 108,
+    burstDamage: 46,
+  },
+  'reactor-vent': {
+    health: 138,
+    minRadius: 25,
+    maxRadius: 30,
+    label: 'REACTOR VENT',
+    effectColor: '#f2be3f',
+    burstRadius: 126,
+    burstDamage: 62,
+  },
+}
+
 function createInitialState() {
   const permanent = getPermanentBonuses()
   const sector = getSector(selectedSectorId)
@@ -734,6 +781,10 @@ function createInitialState() {
     mode: 'running',
     sectorId: sector.id,
     elapsed: 0,
+    obstacleSeed:
+      (sector.visual.seed ^
+        (Date.now() & 0x7fffffff) ^
+        Math.floor(Math.random() * 0x7fffffff)) >>> 0,
     spawnClock: 0.16,
     fireClock: 0,
     shake: 0,
@@ -825,6 +876,7 @@ function createInitialState() {
       cooldown: 6,
       clock: 6,
     },
+    obstacles: [],
     enemies: [],
     bullets: [],
     bossProjectiles: [],
@@ -835,6 +887,340 @@ function createInitialState() {
     rings: [],
     floatingTexts: [],
   }
+}
+
+function nextObstacleRandom() {
+  state.obstacleSeed =
+    (Math.imul(state.obstacleSeed || 1, 1664525) + 1013904223) >>> 0
+  return state.obstacleSeed / 4294967296
+}
+
+function isCircleBlockedByObstacle(x, y, radius, padding = 0) {
+  for (const obstacle of state.obstacles) {
+    if (obstacle.dead) continue
+    const dx = x - obstacle.x
+    const dy = y - obstacle.y
+    const collisionDistance = radius + obstacle.radius + padding
+    if (dx * dx + dy * dy < collisionDistance * collisionDistance) {
+      return true
+    }
+  }
+  return false
+}
+
+function generateSectorObstacles() {
+  state.obstacles.length = 0
+  const sectorConfig = getSector().obstacles
+  const typeConfig = obstacleTypes[sectorConfig.type]
+  const areaFactor = Math.max(
+    0,
+    Math.min(1, (width * height - 115200) / 500000),
+  )
+  const arenaObstacleLimit =
+    width <= 340 && height <= 420 ? 6 : MAX_OBSTACLES
+  const desiredCount = Math.min(
+    arenaObstacleLimit,
+    Math.round(
+      sectorConfig.minCount +
+        (sectorConfig.maxCount - sectorConfig.minCount) * areaFactor,
+    ),
+  )
+  const centerX = width * 0.5
+  const centerY = height * 0.5
+  const compactArena = Math.min(width, height) < 520
+  const centerClearance = compactArena ? 55 : 108
+  const corridorHalfWidth = compactArena ? 32 : 42
+  const verticalCorridor = nextObstacleRandom() < 0.5
+  const maxAttempts = desiredCount * 80
+
+  for (
+    let attempt = 0;
+    attempt < maxAttempts && state.obstacles.length < desiredCount;
+    attempt += 1
+  ) {
+    const radius =
+      typeConfig.minRadius +
+      nextObstacleRandom() * (typeConfig.maxRadius - typeConfig.minRadius)
+    const margin = radius + state.player.radius * 2 + 10
+    const x = margin + nextObstacleRandom() * Math.max(1, width - margin * 2)
+    const y = margin + nextObstacleRandom() * Math.max(1, height - margin * 2)
+    const centerDx = x - centerX
+    const centerDy = y - centerY
+    const centerDistance = centerClearance + radius
+
+    if (
+      centerDx * centerDx + centerDy * centerDy <
+      centerDistance * centerDistance
+    ) {
+      continue
+    }
+    if (
+      verticalCorridor
+        ? Math.abs(centerDx) < corridorHalfWidth + radius
+        : Math.abs(centerDy) < corridorHalfWidth + radius
+    ) {
+      continue
+    }
+
+    const spacing =
+      attempt < maxAttempts * 0.7
+        ? compactArena
+          ? 14
+          : 20
+        : 8
+    if (isCircleBlockedByObstacle(x, y, radius, spacing)) continue
+
+    state.obstacles.push({
+      id: state.nextEntityId++,
+      type: sectorConfig.type,
+      x,
+      y,
+      vx: 0,
+      vy: 0,
+      radius,
+      health: typeConfig.health,
+      maxHealth: typeConfig.health,
+      rotation: nextObstacleRandom() * TAU,
+      phase: nextObstacleRandom() * TAU,
+      detail: nextObstacleRandom(),
+      flash: 0,
+      orbitCooldown: 0,
+      dead: false,
+    })
+  }
+
+  if (state.obstacles.length < 6) {
+    state.obstacles.length = 0
+    const radius = typeConfig.minRadius
+    const margin = radius + state.player.radius * 2 + 10
+    const crossPositions = verticalCorridor
+      ? [
+          [margin, margin],
+          [margin, centerY],
+          [margin, height - margin],
+          [width - margin, margin],
+          [width - margin, centerY],
+          [width - margin, height - margin],
+        ]
+      : [
+          [margin, margin],
+          [centerX, margin],
+          [width - margin, margin],
+          [margin, height - margin],
+          [centerX, height - margin],
+          [width - margin, height - margin],
+        ]
+
+    for (const [x, y] of crossPositions) {
+      state.obstacles.push({
+        id: state.nextEntityId++,
+        type: sectorConfig.type,
+        x,
+        y,
+        vx: 0,
+        vy: 0,
+        radius,
+        health: typeConfig.health,
+        maxHealth: typeConfig.health,
+        rotation: nextObstacleRandom() * TAU,
+        phase: nextObstacleRandom() * TAU,
+        detail: nextObstacleRandom(),
+        flash: 0,
+        orbitCooldown: 0,
+        dead: false,
+      })
+    }
+  }
+}
+
+function resolveCircleAgainstObstacles(
+  entity,
+  radius,
+  slideDistance = 0,
+  slideDirection = 1,
+) {
+  let collided = false
+  let appliedSlide = false
+
+  for (let pass = 0; pass < 2; pass += 1) {
+    let resolvedThisPass = false
+    for (const obstacle of state.obstacles) {
+      if (obstacle.dead) continue
+      let dx = entity.x - obstacle.x
+      let dy = entity.y - obstacle.y
+      const collisionDistance = radius + obstacle.radius
+      const distanceSquared = dx * dx + dy * dy
+      if (distanceSquared >= collisionDistance * collisionDistance) continue
+
+      let distance = Math.sqrt(distanceSquared)
+      if (distance < 0.001) {
+        const fallbackAngle = obstacle.rotation + Math.PI
+        dx = Math.cos(fallbackAngle)
+        dy = Math.sin(fallbackAngle)
+        distance = 1
+      }
+      const normalX = dx / distance
+      const normalY = dy / distance
+      entity.x = obstacle.x + normalX * (collisionDistance + 0.2)
+      entity.y = obstacle.y + normalY * (collisionDistance + 0.2)
+
+      if (slideDistance > 0 && !appliedSlide) {
+        entity.x += -normalY * slideDistance * slideDirection
+        entity.y += normalX * slideDistance * slideDirection
+        appliedSlide = true
+      }
+      collided = true
+      resolvedThisPass = true
+    }
+    if (!resolvedThisPass) break
+  }
+  return collided
+}
+
+function segmentCircleHitTime(
+  startX,
+  startY,
+  endX,
+  endY,
+  centerX,
+  centerY,
+  radius,
+) {
+  if (
+    centerX + radius < Math.min(startX, endX) ||
+    centerX - radius > Math.max(startX, endX) ||
+    centerY + radius < Math.min(startY, endY) ||
+    centerY - radius > Math.max(startY, endY)
+  ) {
+    return Infinity
+  }
+
+  const segmentX = endX - startX
+  const segmentY = endY - startY
+  const offsetX = startX - centerX
+  const offsetY = startY - centerY
+  const startDistanceSquared = offsetX * offsetX + offsetY * offsetY
+  if (startDistanceSquared <= radius * radius) return 0
+
+  const a = segmentX * segmentX + segmentY * segmentY
+  if (a <= 0.000001) return Infinity
+  const b = 2 * (offsetX * segmentX + offsetY * segmentY)
+  const c = startDistanceSquared - radius * radius
+  const discriminant = b * b - 4 * a * c
+  if (discriminant < 0) return Infinity
+  const hitTime = (-b - Math.sqrt(discriminant)) / (2 * a)
+  return hitTime >= 0 && hitTime <= 1 ? hitTime : Infinity
+}
+
+function damageEnemiesInObstacleBurst(obstacle, radius, damage) {
+  const radiusSquared = radius * radius
+  for (const enemy of state.enemies) {
+    if (enemy.dead) continue
+    const dx = enemy.x - obstacle.x
+    const dy = enemy.y - obstacle.y
+    if (dx * dx + dy * dy > radiusSquared) continue
+    enemy.health -= damage
+    enemy.flash = 0.2
+    if (enemy.health <= 0) destroyEnemy(enemy, true)
+  }
+
+  const boss =
+    state.titan.status === 'active' ? state.titan.boss : null
+  if (boss && !boss.dead) {
+    const dx = boss.x - obstacle.x
+    const dy = boss.y - obstacle.y
+    const hitDistance = radius + boss.radius * 0.45
+    if (dx * dx + dy * dy <= hitDistance * hitDistance) {
+      applyTitanDamage(damage * 0.55)
+    }
+  }
+}
+
+function destroyObstacle(obstacle) {
+  if (obstacle.dead) return
+  obstacle.dead = true
+  obstacle.health = 0
+  if (state.targetId === obstacle.id) state.targetId = null
+
+  const config = obstacleTypes[obstacle.type]
+  const particleCount = reducedEffects ? 5 : 10
+  createHitEffect(
+    obstacle.x,
+    obstacle.y,
+    config.effectColor,
+    particleCount,
+  )
+  addRing({
+    kind: 'obstacle-burst',
+    x: obstacle.x,
+    y: obstacle.y,
+    radius: obstacle.radius * 0.55,
+    maxRadius:
+      obstacle.type === 'scrap-barricade'
+        ? obstacle.radius * 2.2
+        : config.burstRadius,
+    life: obstacle.type === 'scrap-barricade' ? 0.36 : 0.5,
+    maxLife: obstacle.type === 'scrap-barricade' ? 0.36 : 0.5,
+    color: config.effectColor,
+  }, true)
+  createFloatingText(
+    config.label,
+    obstacle.x,
+    obstacle.y - obstacle.radius - 8,
+    config.effectColor,
+    1.1,
+    width < 520 ? 11 : 13,
+    true,
+  )
+
+  if (obstacle.type === 'scrap-barricade') {
+    createHitEffect(obstacle.x, obstacle.y, '#bac3c1', reducedEffects ? 3 : 7)
+    spawnResourcePickup('scrap', obstacle)
+  } else if (obstacle.type === 'battery-pylon') {
+    damageEnemiesInObstacleBurst(
+      obstacle,
+      config.burstRadius,
+      config.burstDamage,
+    )
+    if (Math.random() < 0.24) spawnResourcePickup('battery', obstacle)
+  } else if (obstacle.type === 'reactor-vent') {
+    damageEnemiesInObstacleBurst(
+      obstacle,
+      config.burstRadius,
+      config.burstDamage,
+    )
+    const playerDx = state.player.x - obstacle.x
+    const playerDy = state.player.y - obstacle.y
+    if (playerDx * playerDx + playerDy * playerDy <= 72 * 72) {
+      applyPlayerDamage(4)
+      state.player.health = Math.max(1, state.player.health)
+      state.player.hitCooldown = Math.max(state.player.hitCooldown, 0.24)
+      state.warningFlash = Math.max(state.warningFlash, 0.38)
+      updateHud()
+    }
+    if (Math.random() < 0.2) spawnResourcePickup('reactor', obstacle)
+  }
+  state.shake = Math.min(13, state.shake + 2.5)
+}
+
+function applyObstacleDamage(obstacle, damage) {
+  if (!obstacle || obstacle.dead || damage <= 0) return false
+  obstacle.health -= damage
+  obstacle.flash = 0.14
+  if (obstacle.health <= 0) destroyObstacle(obstacle)
+  return true
+}
+
+function compactObstacles() {
+  const obstacles = state.obstacles
+  let writeIndex = 0
+  for (let index = 0; index < obstacles.length; index += 1) {
+    const obstacle = obstacles[index]
+    if (obstacle.dead) continue
+    obstacles[writeIndex] = obstacle
+    writeIndex += 1
+  }
+  obstacles.length = writeIndex
 }
 
 function hideFrontScreens() {
@@ -969,7 +1355,7 @@ function resetGame() {
   ui.levelUp.hidden = true
   ui.onboardingHint.classList.remove('is-hidden')
   ui.performanceValues.textContent =
-    'FPS -- · EN 0 · BLT 0 · BP 0 · MN 0 · BX 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · VIS 0/0 · Q FULL · FT --MS'
+    'FPS -- · EN 0 · OBS 0 · BLT 0 · BP 0 · MN 0 · BX 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · VIS 0/0 · Q FULL · FT --MS'
   ui.spikeIndicator.hidden = true
   ui.weaponConfirmation.textContent = ''
   ui.weaponConfirmation.classList.remove('is-visible')
@@ -977,6 +1363,7 @@ function resetGame() {
   keys.clear()
   reducedEffects = false
   createBackgroundMarks()
+  generateSectorObstacles()
   updateHud()
   lastFrame = performance.now()
 }
@@ -999,6 +1386,25 @@ function resizeCanvas() {
   if (state && oldWidth && oldHeight) {
     state.player.x *= width / oldWidth
     state.player.y *= height / oldHeight
+    for (const obstacle of state.obstacles) {
+      obstacle.x = Math.max(
+        obstacle.radius + state.player.radius * 2 + 10,
+        Math.min(
+          width - obstacle.radius - state.player.radius * 2 - 10,
+          obstacle.x * (width / oldWidth),
+        ),
+      )
+      obstacle.y = Math.max(
+        obstacle.radius + state.player.radius * 2 + 10,
+        Math.min(
+          height - obstacle.radius - state.player.radius * 2 - 10,
+          obstacle.y * (height / oldHeight),
+        ),
+      )
+    }
+    if (state.mode === 'running') {
+      resolveCircleAgainstObstacles(state.player, state.player.radius)
+    }
   }
 
   createBackgroundMarks()
@@ -1365,6 +1771,7 @@ function updatePerformanceReadout(rawDt) {
     }
     ui.performanceValues.textContent =
       `FPS ${Math.round(state.fps)} · EN ${state.enemies.length} · ` +
+      `OBS ${state.obstacles.length} · ` +
       `BLT ${state.bullets.length} · BP ${state.bossProjectiles.length} · ` +
       `MN ${state.bossMines.length} · BX ${state.bossEffects.length} · ` +
       `PCK ${state.pickups.length} · ` +
@@ -1953,6 +2360,28 @@ function damagePlayerFromTitan(amount, cooldown = 0.72) {
   return true
 }
 
+function isTitanMinePositionSafe(x, y, radius) {
+  if (isCircleBlockedByObstacle(x, y, radius, 15)) return false
+
+  const playerDx = x - state.player.x
+  const playerDy = y - state.player.y
+  const playerClearance = radius + state.player.radius + 34
+  if (
+    playerDx * playerDx + playerDy * playerDy <
+    playerClearance * playerClearance
+  ) {
+    return false
+  }
+
+  for (const mine of state.bossMines) {
+    const dx = x - mine.x
+    const dy = y - mine.y
+    const mineClearance = radius + mine.radius + 12
+    if (dx * dx + dy * dy < mineClearance * mineClearance) return false
+  }
+  return true
+}
+
 function dropTitanMine(boss) {
   if (state.bossMines.length >= getEntityCap('bossMines')) return
   const behindX = -Math.cos(boss.angle)
@@ -1960,16 +2389,36 @@ function dropTitanMine(boss) {
   const sideX = -behindY
   const sideY = behindX
   const offset = (Math.random() - 0.5) * boss.radius
+  const baseX = boss.x + behindX * boss.radius * 0.7 + sideX * offset
+  const baseY = boss.y + behindY * boss.radius * 0.7 + sideY * offset
+  const radius = 17
+  let spawnX = 0
+  let spawnY = 0
+  let foundPosition = false
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const searchDistance = attempt === 0 ? 0 : 24 + Math.floor(attempt / 2) * 12
+    const searchAngle = boss.angle + attempt * 2.4
+    const candidateX = Math.max(
+      radius + 1,
+      Math.min(width - radius - 1, baseX + Math.cos(searchAngle) * searchDistance),
+    )
+    const candidateY = Math.max(
+      radius + 1,
+      Math.min(height - radius - 1, baseY + Math.sin(searchAngle) * searchDistance),
+    )
+    if (!isTitanMinePositionSafe(candidateX, candidateY, radius)) continue
+    spawnX = candidateX
+    spawnY = candidateY
+    foundPosition = true
+    break
+  }
+  if (!foundPosition) return
+
   state.bossMines.push({
-    x: Math.max(
-      18,
-      Math.min(width - 18, boss.x + behindX * boss.radius * 0.7 + sideX * offset),
-    ),
-    y: Math.max(
-      18,
-      Math.min(height - 18, boss.y + behindY * boss.radius * 0.7 + sideY * offset),
-    ),
-    radius: 17,
+    x: spawnX,
+    y: spawnY,
+    radius,
     phase: Math.random() * TAU,
     life: 7.5,
     maxLife: 7.5,
@@ -2036,6 +2485,8 @@ function updateTitanHazards(dt) {
   let projectileWriteIndex = 0
   for (let index = 0; index < projectiles.length; index += 1) {
     const projectile = projectiles[index]
+    const previousX = projectile.x
+    const previousY = projectile.y
     projectile.x += projectile.vx * dt
     projectile.y += projectile.vy * dt
     projectile.phase += dt * 4.5
@@ -2050,6 +2501,25 @@ function updateTitanHazards(dt) {
       continue
     }
 
+    let blockedByObstacle = false
+    for (const obstacle of state.obstacles) {
+      if (obstacle.dead) continue
+      const hitTime = segmentCircleHitTime(
+        previousX,
+        previousY,
+        projectile.x,
+        projectile.y,
+        obstacle.x,
+        obstacle.y,
+        projectile.radius + obstacle.radius,
+      )
+      if (hitTime !== Infinity) {
+        blockedByObstacle = true
+        break
+      }
+    }
+    if (blockedByObstacle) continue
+
     const dx = player.x - projectile.x
     const dy = player.y - projectile.y
     const collisionDistance = player.radius + projectile.radius
@@ -2062,6 +2532,18 @@ function updateTitanHazards(dt) {
   }
   projectiles.length = projectileWriteIndex
   trimOldestInPlace(projectiles, getEntityCap('bossProjectiles'))
+}
+
+function crushObstaclesWithTitan(boss, dt) {
+  for (const obstacle of state.obstacles) {
+    if (obstacle.dead) continue
+    const dx = boss.x - obstacle.x
+    const dy = boss.y - obstacle.y
+    const crushDistance = boss.radius * 0.72 + obstacle.radius
+    if (dx * dx + dy * dy <= crushDistance * crushDistance) {
+      applyObstacleDamage(obstacle, 48 * dt)
+    }
+  }
 }
 
 function updateTitanEncounter(dt) {
@@ -2091,6 +2573,8 @@ function updateTitanEncounter(dt) {
   boss.y += boss.vy * dt
   boss.x = Math.max(-boss.radius * 0.5, Math.min(width + boss.radius * 0.5, boss.x))
   boss.y = Math.max(-boss.radius * 0.5, Math.min(height + boss.radius * 0.5, boss.y))
+  crushObstaclesWithTitan(boss, dt)
+  if (boss.dead || state.titan.status !== 'active') return
 
   dx = player.x - boss.x
   dy = player.y - boss.y
@@ -2143,6 +2627,7 @@ function updateTitanEncounter(dt) {
         player.radius + 8,
         Math.min(height - player.radius - 8, player.y),
       )
+      resolveCircleAgainstObstacles(player, player.radius)
     }
   } else if (boss.pullClock <= 0) {
     boss.pullWarning = 0.9
@@ -2285,6 +2770,7 @@ function spawnEnemy(forcedType = null) {
     phase: Math.random() * TAU,
     flash: 0,
     orbitCooldown: 0,
+    avoidDirection: Math.random() < 0.5 ? -1 : 1,
     dead: false,
   })
 
@@ -2348,6 +2834,20 @@ function findNearestEnemy() {
     }
   }
 
+  // Obstacles are fallback targets during a lull. Active hostiles always take
+  // priority, while barricades in an existing shot line are hit naturally.
+  if (!bestEnemy) {
+    for (const obstacle of state.obstacles) {
+      if (obstacle.dead) continue
+      const dx = obstacle.x - player.x
+      const dy = obstacle.y - player.y
+      const distanceSquared = dx * dx + dy * dy
+      if (distanceSquared > 310 * 310 || distanceSquared >= bestScore) continue
+      bestScore = distanceSquared
+      bestEnemy = obstacle
+    }
+  }
+
   state.targetId = bestEnemy?.id ?? null
   return bestEnemy
 }
@@ -2359,8 +2859,8 @@ function fireAtNearestEnemy(target = findNearestEnemy()) {
   const player = state.player
   const targetDistance = Math.hypot(target.x - player.x, target.y - player.y)
   const leadTime = Math.min(targetDistance / player.bulletSpeed, 0.42)
-  const aimX = target.x + target.vx * leadTime
-  const aimY = target.y + target.vy * leadTime
+  const aimX = target.x + (target.vx || 0) * leadTime
+  const aimY = target.y + (target.vy || 0) * leadTime
   const dx = aimX - player.x
   const dy = aimY - player.y
   const distance = Math.hypot(dx, dy) || 1
@@ -2538,15 +3038,50 @@ function rollResourceDrop(enemyType) {
   return null
 }
 
-function spawnResourcePickup(type, enemy) {
+function findClearPickupPosition(x, y, radius) {
+  const margin = radius + 10
+  const clampedX = Math.max(margin, Math.min(width - margin, x))
+  const clampedY = Math.max(margin, Math.min(height - margin, y))
+  if (!isCircleBlockedByObstacle(clampedX, clampedY, radius, 3)) {
+    return { x: clampedX, y: clampedY }
+  }
+
+  const startAngle = (state.nextEntityId * 2.399963) % TAU
+  for (let ring = 1; ring <= 4; ring += 1) {
+    const searchRadius = 24 + ring * 20
+    for (let index = 0; index < 8; index += 1) {
+      const angle = startAngle + index * (TAU / 8)
+      const candidateX = Math.max(
+        margin,
+        Math.min(width - margin, clampedX + Math.cos(angle) * searchRadius),
+      )
+      const candidateY = Math.max(
+        margin,
+        Math.min(height - margin, clampedY + Math.sin(angle) * searchRadius),
+      )
+      if (!isCircleBlockedByObstacle(candidateX, candidateY, radius, 3)) {
+        return { x: candidateX, y: candidateY }
+      }
+    }
+  }
+
+  // The generated center corridor is always obstacle-free, so this fallback
+  // remains collectable even in an unusually dense edge cluster.
+  return { x: state.player.x, y: state.player.y }
+}
+
+function spawnResourcePickup(type, source) {
   const pickupCap = getEntityCap('pickups')
   const atPickupCap = state.pickups.length >= pickupCap
-  const isEssential = type === 'battery' || type === 'reactor'
+  const fromObstacle = Boolean(obstacleTypes[source.type])
+  const isEssential =
+    type === 'battery' || type === 'reactor' || fromObstacle
   if (atPickupCap) {
     if (!isEssential) return
-    const replaceableIndex = state.pickups.findIndex(
+    let replaceableIndex = state.pickups.findIndex(
       (pickup) => pickup.type === 'scrap' || pickup.type === 'gpu',
     )
+    if (replaceableIndex === -1 && fromObstacle) replaceableIndex = 0
     if (replaceableIndex === -1) return
     state.pickups.splice(replaceableIndex, 1)
   } else if (
@@ -2559,16 +3094,17 @@ function spawnResourcePickup(type, enemy) {
 
   const resource = resourceTypes[type]
   const pickupMargin = resource.radius + 10
+  const position = findClearPickupPosition(source.x, source.y, resource.radius)
   const isValuableScrap =
     type === 'scrap' &&
-    (enemy.type === 'heavy' || enemy.type === 'reclaimer')
-  const doubleScrapChance = enemy.type === 'reclaimer' ? 0.8 : 0.55
+    (source.type === 'heavy' || source.type === 'reclaimer')
+  const doubleScrapChance = source.type === 'reclaimer' ? 0.8 : 0.55
 
   state.pickups.push({
     type,
     value: isValuableScrap && Math.random() < doubleScrapChance ? 2 : 1,
-    x: Math.max(pickupMargin, Math.min(width - pickupMargin, enemy.x)),
-    y: Math.max(pickupMargin, Math.min(height - pickupMargin, enemy.y)),
+    x: Math.max(pickupMargin, Math.min(width - pickupMargin, position.x)),
+    y: Math.max(pickupMargin, Math.min(height - pickupMargin, position.y)),
     vx: (Math.random() - 0.5) * 34,
     vy: (Math.random() - 0.5) * 34,
     radius: resource.radius,
@@ -2962,6 +3498,7 @@ function updatePlayer(dt) {
   player.moveY = movement.y
   player.x += movement.x * player.speed * dt
   player.y += movement.y * player.speed * dt
+  resolveCircleAgainstObstacles(player, player.radius)
   player.x = Math.max(player.radius + 8, Math.min(width - player.radius - 8, player.x))
   player.y = Math.max(player.radius + 8, Math.min(height - player.radius - 8, player.y))
   player.hitCooldown = Math.max(0, player.hitCooldown - dt)
@@ -3140,6 +3677,42 @@ function updateOrbitDrones(dt) {
     }
   }
 
+  for (const obstacle of state.obstacles) {
+    if (obstacle.dead) continue
+    obstacle.orbitCooldown = Math.max(0, obstacle.orbitCooldown - dt)
+    if (obstacle.orbitCooldown > 0) continue
+
+    const playerDx = obstacle.x - state.player.x
+    const playerDy = obstacle.y - state.player.y
+    const outerDistance = orbit.radius + orbit.droneRadius + obstacle.radius
+    const innerDistance = Math.max(
+      0,
+      orbit.radius - orbit.droneRadius - obstacle.radius,
+    )
+    const playerDistanceSquared =
+      playerDx * playerDx + playerDy * playerDy
+    if (
+      playerDistanceSquared > outerDistance * outerDistance ||
+      playerDistanceSquared < innerDistance * innerDistance
+    ) {
+      continue
+    }
+
+    for (const drone of orbit.positions) {
+      const dx = drone.x - obstacle.x
+      const dy = drone.y - obstacle.y
+      const collisionDistance = orbit.droneRadius + obstacle.radius
+      if (dx * dx + dy * dy > collisionDistance * collisionDistance) continue
+      applyObstacleDamage(obstacle, orbit.damage)
+      obstacle.orbitCooldown = orbit.hitInterval
+      if (impactEffects < impactEffectBudget) {
+        createHitEffect(drone.x, drone.y, '#79f7ff', 3)
+        impactEffects += 1
+      }
+      break
+    }
+  }
+
   const boss =
     state.titan.status === 'active' ? state.titan.boss : null
   if (!boss || boss.dead) return
@@ -3195,6 +3768,16 @@ function triggerEmpBurst() {
     if (enemy.health <= 0) destroyEnemy(enemy, true)
   }
 
+  for (const obstacle of state.obstacles) {
+    if (obstacle.dead) continue
+    const dx = obstacle.x - player.x
+    const dy = obstacle.y - player.y
+    const hitRadius = emp.radius + obstacle.radius
+    if (dx * dx + dy * dy <= hitRadius * hitRadius) {
+      applyObstacleDamage(obstacle, emp.damage)
+    }
+  }
+
   const boss =
     state.titan.status === 'active' ? state.titan.boss : null
   if (boss && !boss.dead) {
@@ -3238,12 +3821,23 @@ function updateEnemies(dt) {
     enemy.vy = directionY * enemy.speed * approachScale + directionX * sway
     enemy.x += enemy.vx * dt
     enemy.y += enemy.vy * dt
+    resolveCircleAgainstObstacles(
+      enemy,
+      enemy.radius,
+      enemy.speed * dt * 0.55,
+      enemy.avoidDirection,
+    )
 
+    const playerDx = player.x - enemy.x
+    const playerDy = player.y - enemy.y
     const collisionDistance = player.radius + enemy.radius
-    if (distance < collisionDistance) {
-      const overlap = collisionDistance - distance
-      enemy.x -= directionX * overlap * 0.78
-      enemy.y -= directionY * overlap * 0.78
+    const playerDistanceSquared =
+      playerDx * playerDx + playerDy * playerDy
+    if (playerDistanceSquared < collisionDistance * collisionDistance) {
+      const playerDistance = Math.sqrt(playerDistanceSquared) || 1
+      const overlap = collisionDistance - playerDistance
+      enemy.x -= (playerDx / playerDistance) * overlap * 0.78
+      enemy.y -= (playerDy / playerDistance) * overlap * 0.78
 
       if (player.hitCooldown <= 0) {
         const damage = applyPlayerDamage(enemy.damage)
@@ -3297,6 +3891,10 @@ function updateEnemies(dt) {
         if (separations >= maxSeparations) break separationLoop
       }
     }
+  }
+
+  for (const enemy of state.enemies) {
+    if (!enemy.dead) resolveCircleAgainstObstacles(enemy, enemy.radius)
   }
 }
 
@@ -3353,68 +3951,107 @@ function updateBullets(dt) {
       continue
     }
 
+    let hitTarget = null
+    let hitKind = ''
+    let earliestHitTime = Infinity
+
+    for (const obstacle of state.obstacles) {
+      if (obstacle.dead) continue
+      const hitTime = segmentCircleHitTime(
+        bullet.previousX,
+        bullet.previousY,
+        bullet.x,
+        bullet.y,
+        obstacle.x,
+        obstacle.y,
+        bullet.radius + obstacle.radius,
+      )
+      if (hitTime < earliestHitTime) {
+        earliestHitTime = hitTime
+        hitTarget = obstacle
+        hitKind = 'obstacle'
+      }
+    }
+
     const boss =
       state.titan.status === 'active' ? state.titan.boss : null
     if (boss && !boss.dead) {
-      const dx = bullet.x - boss.x
-      const dy = bullet.y - boss.y
-      const collisionDistance = bullet.radius + boss.radius * 0.84
-      if (
-        Math.abs(dx) <= collisionDistance &&
-        Math.abs(dy) <= collisionDistance &&
-        dx * dx + dy * dy <= collisionDistance * collisionDistance
-      ) {
+      const hitTime = segmentCircleHitTime(
+        bullet.previousX,
+        bullet.previousY,
+        bullet.x,
+        bullet.y,
+        boss.x,
+        boss.y,
+        bullet.radius + boss.radius * 0.84,
+      )
+      if (hitTime < earliestHitTime) {
+        earliestHitTime = hitTime
+        hitTarget = boss
+        hitKind = 'boss'
+      }
+    }
+
+    for (let enemyIndex = 0; enemyIndex < enemies.length; enemyIndex += 1) {
+      const enemy = enemies[enemyIndex]
+      if (enemy.dead) continue
+      const hitTime = segmentCircleHitTime(
+        bullet.previousX,
+        bullet.previousY,
+        bullet.x,
+        bullet.y,
+        enemy.x,
+        enemy.y,
+        bullet.radius + enemy.radius,
+      )
+      if (hitTime < earliestHitTime) {
+        earliestHitTime = hitTime
+        hitTarget = enemy
+        hitKind = 'enemy'
+      }
+    }
+
+    if (hitTarget) {
+      bullet.x =
+        bullet.previousX + (bullet.x - bullet.previousX) * earliestHitTime
+      bullet.y =
+        bullet.previousY + (bullet.y - bullet.previousY) * earliestHitTime
+      bullet.life = 0
+      createHitEffect(
+        bullet.x,
+        bullet.y,
+        '#ffd077',
+        bullet.surged ? 2 : hitKind === 'obstacle' ? 4 : 6,
+      )
+
+      if (hitKind === 'obstacle') {
+        applyObstacleDamage(hitTarget, bullet.damage)
+      } else if (hitKind === 'boss') {
         applyTitanDamage(bullet.damage)
-        bullet.life = 0
-        createHitEffect(
-          bullet.x,
-          bullet.y,
-          '#ffd077',
-          bullet.surged ? 2 : 5,
-        )
         createFloatingText(
           Math.round(bullet.damage),
-          boss.x + (Math.random() - 0.5) * 18,
-          boss.y - boss.radius * 0.72,
+          hitTarget.x + (Math.random() - 0.5) * 18,
+          hitTarget.y - hitTarget.radius * 0.72,
+          '#ffe1a1',
+          0.58,
+          10,
+        )
+      } else {
+        hitTarget.health -= bullet.damage
+        hitTarget.flash = 0.14
+        if (hitTarget.health <= 0) destroyEnemy(hitTarget)
+      }
+
+      if (hitKind === 'enemy') {
+        createFloatingText(
+          Math.round(bullet.damage),
+          hitTarget.x + (Math.random() - 0.5) * 8,
+          hitTarget.y - hitTarget.radius,
           '#ffe1a1',
           0.58,
           10,
         )
       }
-    }
-
-    for (
-      let enemyIndex = 0;
-      bullet.life > 0 && enemyIndex < enemies.length;
-      enemyIndex += 1
-    ) {
-      const enemy = enemies[enemyIndex]
-      if (enemy.dead) continue
-      const dx = bullet.x - enemy.x
-      const dy = bullet.y - enemy.y
-      const collisionDistance = bullet.radius + enemy.radius
-      if (
-        Math.abs(dx) > collisionDistance ||
-        Math.abs(dy) > collisionDistance ||
-        dx * dx + dy * dy > collisionDistance * collisionDistance
-      ) {
-        continue
-      }
-
-      enemy.health -= bullet.damage
-      enemy.flash = 0.14
-      bullet.life = 0
-      createHitEffect(bullet.x, bullet.y, '#ffd077', bullet.surged ? 2 : 6)
-      createFloatingText(
-        Math.round(bullet.damage),
-        enemy.x + (Math.random() - 0.5) * 8,
-        enemy.y - enemy.radius,
-        '#ffe1a1',
-        0.58,
-        10,
-      )
-      if (enemy.health <= 0) destroyEnemy(enemy)
-      break
     }
 
     if (bullet.life > 0) {
@@ -3427,6 +4064,7 @@ function updateBullets(dt) {
 
   // Dead targets are removed in the same frame they are killed, before render.
   compactEnemies()
+  compactObstacles()
 }
 
 function updatePickups(dt) {
@@ -3479,6 +4117,13 @@ function updatePickups(dt) {
   // world. Trimming only to the device hard cap prevents visible pickups from
   // popping out when the performance profile changes mid-run.
   trimOldestInPlace(pickups, entityCaps.pickups)
+}
+
+function updateObstacles(dt) {
+  for (const obstacle of state.obstacles) {
+    obstacle.flash = Math.max(0, obstacle.flash - dt)
+    obstacle.phase = (obstacle.phase + dt * 1.8) % TAU
+  }
 }
 
 function updateEffects(dt) {
@@ -3572,6 +4217,7 @@ function update(dt, wallDt = dt) {
   state.introClock -= dt
   if (state.introClock <= 0) ui.onboardingHint.classList.add('is-hidden')
   state.hudClock -= wallDt
+  updateObstacles(dt)
   updatePlayer(dt)
   updateTitanEncounter(dt)
   if (state.mode !== 'running') return
@@ -3679,6 +4325,174 @@ function drawBackground() {
   ctx.globalAlpha = 1
   drawSectorAtmosphere()
   ctx.drawImage(vignetteLayer, 0, 0, width, height)
+}
+
+function drawObstacleHealthBar(obstacle) {
+  if (obstacle.health >= obstacle.maxHealth || obstacle.health <= 0) return
+  const healthRatio = Math.max(0, obstacle.health / obstacle.maxHealth)
+  const barWidth = obstacle.radius * 1.65
+  const barX = Math.round(obstacle.x - barWidth * 0.5)
+  const barY = Math.round(obstacle.y - obstacle.radius - 9)
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.72)'
+  ctx.fillRect(barX, barY, barWidth, 4)
+  ctx.fillStyle = obstacleTypes[obstacle.type].effectColor
+  ctx.fillRect(barX, barY, Math.max(1, barWidth * healthRatio), 4)
+}
+
+function drawScrapBarricade(obstacle) {
+  const radius = obstacle.radius
+  ctx.fillStyle = '#252a29'
+  ctx.strokeStyle = obstacle.flash > 0 ? '#fff1ce' : '#080c0d'
+  ctx.lineWidth = obstacle.flash > 0 ? 4 : 3
+  ctx.beginPath()
+  ctx.moveTo(-radius * 0.95, -radius * 0.28)
+  ctx.lineTo(-radius * 0.42, -radius * 0.75)
+  ctx.lineTo(radius * 0.78, -radius * 0.55)
+  ctx.lineTo(radius, radius * 0.18)
+  ctx.lineTo(radius * 0.4, radius * 0.66)
+  ctx.lineTo(-radius * 0.72, radius * 0.56)
+  ctx.closePath()
+  ctx.fill()
+  ctx.stroke()
+
+  ctx.fillStyle = '#a9562e'
+  ctx.fillRect(-radius * 0.74, -radius * 0.34, radius * 0.58, radius * 0.56)
+  ctx.fillStyle = '#727d7b'
+  ctx.fillRect(-radius * 0.08, -radius * 0.48, radius * 0.72, radius * 0.26)
+  ctx.fillStyle = '#c2783e'
+  ctx.fillRect(radius * 0.22, radius * 0.02, radius * 0.58, radius * 0.3)
+  ctx.strokeStyle = '#c5cecb'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(-radius * 0.65, radius * 0.43)
+  ctx.lineTo(radius * 0.68, -radius * 0.4)
+  ctx.stroke()
+
+  ctx.fillStyle = '#d5ddda'
+  ctx.beginPath()
+  ctx.arc(-radius * 0.48, -radius * 0.08, 2, 0, TAU)
+  ctx.arc(radius * 0.58, radius * 0.17, 2, 0, TAU)
+  ctx.fill()
+}
+
+function drawBatteryPylon(obstacle) {
+  const radius = obstacle.radius
+  const pulse = (Math.sin(obstacle.phase * 2.2) + 1) * 0.5
+  ctx.fillStyle = '#10191d'
+  ctx.strokeStyle = obstacle.flash > 0 ? '#e9fbff' : '#071014'
+  ctx.lineWidth = obstacle.flash > 0 ? 4 : 3
+  ctx.fillRect(
+    -radius * 0.62,
+    -radius * 0.9,
+    radius * 1.24,
+    radius * 1.8,
+  )
+  ctx.strokeRect(
+    -radius * 0.62,
+    -radius * 0.9,
+    radius * 1.24,
+    radius * 1.8,
+  )
+
+  ctx.fillStyle = '#263a42'
+  ctx.fillRect(-radius * 0.48, -radius * 0.72, radius * 0.96, radius * 0.42)
+  ctx.fillRect(-radius * 0.48, -radius * 0.16, radius * 0.96, radius * 0.42)
+  ctx.fillRect(-radius * 0.48, radius * 0.4, radius * 0.96, radius * 0.3)
+  ctx.strokeStyle = '#4db9e5'
+  ctx.lineWidth = 2
+  ctx.strokeRect(-radius * 0.48, -radius * 0.72, radius * 0.96, radius * 0.42)
+  ctx.strokeRect(-radius * 0.48, -radius * 0.16, radius * 0.96, radius * 0.42)
+
+  ctx.shadowColor = '#55cfff'
+  ctx.shadowBlur = reducedEffects ? 0 : 7 + pulse * 4
+  ctx.fillStyle = '#72dcff'
+  ctx.fillRect(-radius * 0.29, -radius * 0.57, radius * 0.58, 3)
+  ctx.fillRect(-radius * 0.29, -radius * 0.01, radius * 0.58, 3)
+  ctx.shadowBlur = 0
+  ctx.fillStyle = '#b8efff'
+  ctx.fillRect(-4, -radius - 3, 8, 5)
+}
+
+function drawReactorVent(obstacle) {
+  const radius = obstacle.radius
+  const pulse = (Math.sin(obstacle.phase * 1.8) + 1) * 0.5
+  ctx.fillStyle = '#28261b'
+  ctx.strokeStyle = obstacle.flash > 0 ? '#fff4c6' : '#080b0b'
+  ctx.lineWidth = obstacle.flash > 0 ? 4 : 3
+  ctx.beginPath()
+  for (let index = 0; index < 8; index += 1) {
+    const angle = Math.PI / 8 + index * (TAU / 8)
+    const x = Math.cos(angle) * radius
+    const y = Math.sin(angle) * radius
+    if (index === 0) ctx.moveTo(x, y)
+    else ctx.lineTo(x, y)
+  }
+  ctx.closePath()
+  ctx.fill()
+  ctx.stroke()
+
+  ctx.fillStyle = '#6f3b20'
+  ctx.strokeStyle = '#d09b36'
+  ctx.lineWidth = 3
+  ctx.beginPath()
+  ctx.arc(0, 0, radius * 0.62, 0, TAU)
+  ctx.fill()
+  ctx.stroke()
+  ctx.fillStyle = '#161917'
+  ctx.beginPath()
+  ctx.arc(0, 0, radius * 0.34, 0, TAU)
+  ctx.fill()
+
+  ctx.shadowColor = '#ffba38'
+  ctx.shadowBlur = reducedEffects ? 0 : 5 + pulse * 5
+  ctx.strokeStyle = '#f2c84b'
+  ctx.lineWidth = 2
+  for (let index = 0; index < 3; index += 1) {
+    const angle = obstacle.phase * 0.08 + index * (TAU / 3)
+    ctx.beginPath()
+    ctx.moveTo(Math.cos(angle) * radius * 0.22, Math.sin(angle) * radius * 0.22)
+    ctx.lineTo(Math.cos(angle + 0.18) * radius * 0.55, Math.sin(angle + 0.18) * radius * 0.55)
+    ctx.lineTo(Math.cos(angle - 0.08) * radius * 0.82, Math.sin(angle - 0.08) * radius * 0.82)
+    ctx.stroke()
+  }
+  ctx.shadowBlur = 0
+  ctx.fillStyle = '#d9432f'
+  ctx.beginPath()
+  ctx.arc(0, 0, 4 + pulse * 1.5, 0, TAU)
+  ctx.fill()
+}
+
+function drawObstacle(obstacle) {
+  if (obstacle.dead) return
+  ctx.save()
+  ctx.translate(obstacle.x, obstacle.y)
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.44)'
+  ctx.beginPath()
+  ctx.ellipse(
+    2,
+    obstacle.radius * 0.58,
+    obstacle.radius * 0.98,
+    obstacle.radius * 0.42,
+    0,
+    0,
+    TAU,
+  )
+  ctx.fill()
+  ctx.rotate(
+    obstacle.type === 'battery-pylon'
+      ? (obstacle.detail - 0.5) * 0.12
+      : obstacle.rotation,
+  )
+
+  if (obstacle.type === 'scrap-barricade') drawScrapBarricade(obstacle)
+  else if (obstacle.type === 'battery-pylon') drawBatteryPylon(obstacle)
+  else drawReactorVent(obstacle)
+  ctx.restore()
+  drawObstacleHealthBar(obstacle)
+}
+
+function drawObstacles() {
+  for (const obstacle of state.obstacles) drawObstacle(obstacle)
 }
 
 function drawPickup(pickup) {
@@ -4570,6 +5384,7 @@ function render() {
   const shakeY = state.shake ? (Math.random() - 0.5) * state.shake : 0
   ctx.translate(shakeX, shakeY)
   drawExtractionBeacon()
+  drawObstacles()
   state.pickups.forEach(drawPickup)
   drawTitanMines()
   state.enemies.forEach(drawEnemy)
