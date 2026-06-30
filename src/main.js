@@ -49,6 +49,15 @@ app.innerHTML = `
           <div class="hud-stat gpu-stat"><span>GPU</span><strong id="gpu-count">0 / 6</strong></div>
           <div class="hud-stat scrap-stat"><span>Scrap</span><strong id="scrap-count">000</strong></div>
           <div class="hud-stat"><span>Kills</span><strong id="kill-count">000</strong></div>
+          <button
+            id="pause-button"
+            class="pause-button"
+            type="button"
+            aria-label="Pause game"
+            hidden
+          >
+            II
+          </button>
         </div>
       </div>
 
@@ -73,7 +82,7 @@ app.innerHTML = `
         <p id="mission-copy">Collect salvage to call extraction</p>
         <div class="mission-progress"><i id="mission-progress-bar"></i></div>
         <div class="mission-readout">
-          <b id="mission-salvage">0 / 220</b>
+          <b id="mission-salvage">0 / 640</b>
           <button id="extraction-button" type="button" hidden>
             Call extraction <small>E</small>
           </button>
@@ -87,6 +96,13 @@ app.innerHTML = `
         <span class="touch-control">Touch and drag to move</span>
       </div>
 
+      <div
+        id="context-hint"
+        class="context-hint"
+        role="status"
+        aria-live="polite"
+      ></div>
+
       <div id="reactor-status" class="reactor-status" hidden>
         <div>
           <span>High-output state</span>
@@ -96,7 +112,7 @@ app.innerHTML = `
         <div class="reactor-meter"><i id="reactor-meter"></i></div>
       </div>
 
-      <div id="performance-readout" class="performance-readout">
+      <div id="performance-readout" class="performance-readout" hidden>
         <span id="performance-values">FPS -- · EN 0 · OBS 0 · BLT 0 · BP 0 · MN 0 · BX 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · VIS 0/0 · Q FULL · FT --MS</span>
         <b id="spike-indicator" class="spike-indicator" hidden>SPIKE</b>
       </div>
@@ -133,6 +149,46 @@ app.innerHTML = `
           <h2 id="level-title">Choose an upgrade</h2>
           <p>Integrate salvaged hardware into the drone.</p>
           <div id="upgrade-options" class="upgrade-grid"></div>
+        </div>
+      </div>
+
+      <div id="pause-menu" class="modal-overlay" hidden>
+        <div class="modal-panel pause-panel" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+          <span class="modal-kicker">Mission suspended</span>
+          <h2 id="pause-title">Paused</h2>
+          <p>Simulation and mission time are stopped.</p>
+          <div class="pause-actions">
+            <button id="pause-resume-button" class="primary-action" type="button">Resume</button>
+            <button id="pause-restart-button" class="secondary-action" type="button">Restart Run</button>
+            <button id="pause-menu-button" class="secondary-action" type="button">Return to Main Menu</button>
+          </div>
+          <p id="pause-status" class="screen-status" aria-live="polite"></p>
+          <div class="settings-grid" aria-label="Game settings">
+            <button id="pause-sound-toggle" class="setting-toggle" type="button">Sound ON</button>
+            <button id="haptics-toggle" class="setting-toggle" type="button">Haptics ON</button>
+            <button id="reduced-fx-toggle" class="setting-toggle" type="button">Reduced FX OFF</button>
+            <button id="diagnostics-toggle" class="setting-toggle" type="button">Show Diagnostics OFF</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="mission-briefing" class="modal-overlay front-screen" hidden>
+        <div class="modal-panel briefing-panel" role="dialog" aria-modal="true" aria-labelledby="briefing-title">
+          <span class="modal-kicker">First deployment // Training route</span>
+          <h2 id="briefing-title">Mission Briefing</h2>
+          <p>Recover dead-zone hardware and bring the drone home.</p>
+          <div class="briefing-grid">
+            <div><b>01</b><strong>Move the drone</strong><span>Use WASD, arrow keys, or touch and drag.</span></div>
+            <div><b>02</b><strong>Weapons fire automatically</strong><span>Keep moving while Arc Pulse tracks threats.</span></div>
+            <div><b>03</b><strong>Collect GPUs</strong><span>GPU fragments unlock upgrades during the run.</span></div>
+            <div><b>04</b><strong>Recover salvage</strong><span>Fill the mission meter to call extraction.</span></div>
+            <div><b>05</b><strong>Extract for rewards</strong><span>Successful extraction keeps the best recovery payout.</span></div>
+            <div><b>06</b><strong>Upgrade the Hangar</strong><span>Permanent hardware improves future deployments.</span></div>
+          </div>
+          <div class="briefing-actions">
+            <button id="training-start-button" class="primary-action" type="button">Start Training Run</button>
+            <button id="briefing-skip-button" class="secondary-action" type="button">Skip Briefing</button>
+          </div>
         </div>
       </div>
 
@@ -245,8 +301,10 @@ const canvas = document.querySelector('#game-canvas')
 const ctx = canvas.getContext('2d')
 
 const ui = {
+  gameShell: document.querySelector('.game-shell'),
   brandSector: document.querySelector('#brand-sector'),
   soundToggle: document.querySelector('#sound-toggle'),
+  pauseButton: document.querySelector('#pause-button'),
   healthPanel: document.querySelector('.health-panel'),
   healthText: document.querySelector('#health-text'),
   healthBar: document.querySelector('#health-bar'),
@@ -279,6 +337,18 @@ const ui = {
   empRadius: document.querySelector('#emp-radius-stat'),
   levelUp: document.querySelector('#level-up'),
   upgradeOptions: document.querySelector('#upgrade-options'),
+  pauseMenu: document.querySelector('#pause-menu'),
+  pauseResumeButton: document.querySelector('#pause-resume-button'),
+  pauseRestartButton: document.querySelector('#pause-restart-button'),
+  pauseMenuButton: document.querySelector('#pause-menu-button'),
+  pauseStatus: document.querySelector('#pause-status'),
+  pauseSoundToggle: document.querySelector('#pause-sound-toggle'),
+  hapticsToggle: document.querySelector('#haptics-toggle'),
+  reducedFxToggle: document.querySelector('#reduced-fx-toggle'),
+  diagnosticsToggle: document.querySelector('#diagnostics-toggle'),
+  missionBriefing: document.querySelector('#mission-briefing'),
+  trainingStartButton: document.querySelector('#training-start-button'),
+  briefingSkipButton: document.querySelector('#briefing-skip-button'),
   mainMenu: document.querySelector('#main-menu'),
   menuScrap: document.querySelector('#menu-scrap'),
   menuGpu: document.querySelector('#menu-gpu'),
@@ -318,16 +388,53 @@ const ui = {
   summaryHangarButton: document.querySelector('#summary-hangar-button'),
   summaryRestartButton: document.querySelector('#summary-restart-button'),
   onboardingHint: document.querySelector('#onboarding-hint'),
+  contextHint: document.querySelector('#context-hint'),
   reactorStatus: document.querySelector('#reactor-status'),
   reactorTime: document.querySelector('#reactor-time'),
   reactorMeter: document.querySelector('#reactor-meter'),
   performanceValues: document.querySelector('#performance-values'),
+  performanceReadout: document.querySelector('#performance-readout'),
   spikeIndicator: document.querySelector('#spike-indicator'),
   weaponCard: document.querySelector('.weapon-card'),
   weaponConfirmation: document.querySelector('#weapon-confirmation'),
 }
 
 const audio = createAudioManager()
+const SETTINGS_KEY = 'danger-close-settings-v1'
+const HAPTICS_AVAILABLE =
+  typeof navigator.vibrate === 'function' &&
+  (navigator.maxTouchPoints || 0) > 0
+
+function loadPreferences() {
+  const defaults = {
+    onboardingSeen: false,
+    haptics: true,
+    reducedFx: false,
+    diagnostics: false,
+  }
+  try {
+    const stored = JSON.parse(
+      window.localStorage.getItem(SETTINGS_KEY) || 'null',
+    )
+    if (!stored || typeof stored !== 'object') return defaults
+    for (const key of Object.keys(defaults)) {
+      if (typeof stored[key] === 'boolean') defaults[key] = stored[key]
+    }
+  } catch {
+    return defaults
+  }
+  return defaults
+}
+
+function savePreferences() {
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(preferences))
+  } catch {
+    // Preferences still apply for this session when storage is unavailable.
+  }
+}
+
+const preferences = loadPreferences()
 const TAU = Math.PI * 2
 const keys = new Set()
 const movementVector = { x: 0, y: 0 }
@@ -351,8 +458,10 @@ let ambientGlows = []
 let sectorArcs = []
 const backgroundLayer = document.createElement('canvas')
 const vignetteLayer = document.createElement('canvas')
-let reducedEffects = false
+let adaptiveReducedEffects = false
+let reducedEffects = preferences.reducedFx
 let resetSaveArmed = false
+let pauseRestartArmed = false
 
 const MAX_SCREEN_SHAKE = 10
 const OBSTACLE_DESTROY_SOUNDS = {
@@ -370,6 +479,78 @@ function updateSoundToggle() {
     ? `Sound ${enabled ? 'ON' : 'OFF'}`
     : 'Sound N/A'
   ui.soundToggle.setAttribute('aria-pressed', String(enabled))
+  ui.pauseSoundToggle.textContent = available
+    ? `Sound ${enabled ? 'ON' : 'OFF'}`
+    : 'Sound N/A'
+  ui.pauseSoundToggle.disabled = !available
+  ui.pauseSoundToggle.setAttribute('aria-pressed', String(enabled))
+}
+
+function syncReducedEffects() {
+  reducedEffects = preferences.reducedFx || adaptiveReducedEffects
+}
+
+function updateSettingsUi() {
+  updateSoundToggle()
+  ui.hapticsToggle.disabled = !HAPTICS_AVAILABLE
+  ui.hapticsToggle.textContent = HAPTICS_AVAILABLE
+    ? `Haptics ${preferences.haptics ? 'ON' : 'OFF'}`
+    : 'Haptics N/A'
+  ui.hapticsToggle.setAttribute(
+    'aria-pressed',
+    String(HAPTICS_AVAILABLE && preferences.haptics),
+  )
+  ui.reducedFxToggle.textContent =
+    `Reduced FX ${preferences.reducedFx ? 'ON' : 'OFF'}`
+  ui.reducedFxToggle.setAttribute(
+    'aria-pressed',
+    String(preferences.reducedFx),
+  )
+  ui.diagnosticsToggle.textContent =
+    `Show Diagnostics ${preferences.diagnostics ? 'ON' : 'OFF'}`
+  ui.diagnosticsToggle.setAttribute(
+    'aria-pressed',
+    String(preferences.diagnostics),
+  )
+  ui.performanceReadout.hidden = !preferences.diagnostics
+  ui.spikeIndicator.hidden =
+    !preferences.diagnostics || !state || state.spikeTimer <= 0
+  ui.gameShell.classList.toggle(
+    'user-reduced-fx',
+    preferences.reducedFx,
+  )
+  syncReducedEffects()
+}
+
+function playHaptic(pattern, key, cooldown) {
+  if (!preferences.haptics || !HAPTICS_AVAILABLE) return
+  triggerHaptic(pattern, key, cooldown)
+}
+
+function toggleHaptics() {
+  if (!HAPTICS_AVAILABLE) return
+  preferences.haptics = !preferences.haptics
+  if (!preferences.haptics) {
+    try {
+      navigator.vibrate(0)
+    } catch {
+      // Vibration cancellation is best-effort.
+    }
+  }
+  savePreferences()
+  updateSettingsUi()
+}
+
+function toggleReducedFx() {
+  preferences.reducedFx = !preferences.reducedFx
+  savePreferences()
+  updateSettingsUi()
+}
+
+function toggleDiagnostics() {
+  preferences.diagnostics = !preferences.diagnostics
+  savePreferences()
+  updateSettingsUi()
 }
 
 function addScreenShake(amount) {
@@ -454,7 +635,7 @@ const REDUCED_EFFECTS_RECOVERY_SECONDS = 2.8
 const SAVE_KEY = 'danger-close-save-v1'
 const SAVE_VERSION = 1
 const MAX_UPGRADE_RANK = 5
-const MISSION_SALVAGE_REQUIRED = 220
+const MISSION_SALVAGE_REQUIRED = 640
 const EXTRACTION_DURATION = 60
 const TITAN_SPAWN_DELAY = 2.25
 const TITAN_MAX_HEALTH = 1450
@@ -488,7 +669,7 @@ const sectors = [
       'Destructible scrap barricades',
       'Standard enemy pressure',
       'Balanced salvage drops',
-      '220 salvage extraction target',
+      '640 salvage extraction target',
       'Standard recovery rewards',
     ],
     gameplay: {
@@ -533,7 +714,7 @@ const sectors = [
       'EV battery drops increased',
       '+5 starting shield',
       'Scout bots appear more often',
-      '238 salvage extraction target',
+      '691 salvage extraction target',
       '+12 SCR on successful extraction',
     ],
     gameplay: {
@@ -578,7 +759,7 @@ const sectors = [
       'Reactor core drops increased',
       'Reactor Surge lasts +2 seconds',
       'Enemy pressure increased',
-      '211 salvage extraction target',
+      '614 salvage extraction target',
       '+1 RCT on successful extraction',
     ],
     gameplay: {
@@ -889,6 +1070,10 @@ function createInitialState() {
   )
   return {
     mode: 'running',
+    trainingRun: false,
+    trainingHintStage: 0,
+    contextHintTime: 0,
+    contextHintQueue: [],
     sectorId: sector.id,
     elapsed: 0,
     obstacleSeed:
@@ -1402,6 +1587,9 @@ function hideFrontScreens() {
   ui.sectorSelect.hidden = true
   ui.hangar.hidden = true
   ui.runSummary.hidden = true
+  ui.pauseMenu.hidden = true
+  ui.missionBriefing.hidden = true
+  ui.contextHint.classList.remove('is-visible')
 }
 
 function updateProfileWallets() {
@@ -1421,19 +1609,43 @@ function clearResetConfirmation() {
   ui.resetSaveStatus.textContent = ''
 }
 
+function clearPauseRestartConfirmation() {
+  pauseRestartArmed = false
+  ui.pauseRestartButton.textContent = 'Restart Run'
+  ui.pauseRestartButton.classList.remove('is-armed')
+  ui.pauseStatus.textContent = ''
+}
+
+function markOnboardingSeen() {
+  if (preferences.onboardingSeen) return
+  preferences.onboardingSeen = true
+  savePreferences()
+}
+
+function showMissionBriefing() {
+  ui.mainMenu.hidden = true
+  ui.missionBriefing.hidden = false
+}
+
 function showMainMenu() {
   state = createInitialState()
   state.mode = 'menu'
-  reducedEffects = false
+  audio.setPaused(false)
+  adaptiveReducedEffects = false
+  syncReducedEffects()
   hideFrontScreens()
   ui.levelUp.hidden = true
   ui.mainMenu.hidden = false
   ui.onboardingHint.classList.add('is-hidden')
+  ui.contextHint.classList.remove('is-visible')
   pointer.active = false
   keys.clear()
   clearResetConfirmation()
+  clearPauseRestartConfirmation()
   updateProfileWallets()
   updateHud()
+  updateSettingsUi()
+  if (!preferences.onboardingSeen) showMissionBriefing()
   lastFrame = performance.now()
 }
 
@@ -1479,7 +1691,8 @@ function renderSectorSelect() {
 function showSectorSelect() {
   state = createInitialState()
   state.mode = 'sector'
-  reducedEffects = false
+  adaptiveReducedEffects = false
+  syncReducedEffects()
   hideFrontScreens()
   ui.levelUp.hidden = true
   ui.sectorSelect.hidden = false
@@ -1492,10 +1705,10 @@ function showSectorSelect() {
   lastFrame = performance.now()
 }
 
-function startMission(sectorId) {
+function startMission(sectorId, trainingRun = false) {
   if (!sectorsById[sectorId]) return
   selectedSectorId = sectorId
-  resetGame()
+  resetGame(trainingRun)
 }
 
 function previewSector(sectorId) {
@@ -1510,7 +1723,8 @@ function previewSector(sectorId) {
 function showHangar() {
   state = createInitialState()
   state.mode = 'hangar'
-  reducedEffects = false
+  adaptiveReducedEffects = false
+  syncReducedEffects()
   hideFrontScreens()
   ui.levelUp.hidden = true
   ui.hangar.hidden = false
@@ -1523,11 +1737,14 @@ function showHangar() {
   lastFrame = performance.now()
 }
 
-function resetGame() {
+function resetGame(trainingRun = false) {
   state = createInitialState()
+  state.trainingRun = trainingRun
+  audio.setPaused(false)
   hideFrontScreens()
   ui.levelUp.hidden = true
-  ui.onboardingHint.classList.remove('is-hidden')
+  ui.onboardingHint.classList.toggle('is-hidden', !trainingRun)
+  ui.contextHint.classList.remove('is-visible')
   ui.performanceValues.textContent =
     'FPS -- · EN 0 · OBS 0 · BLT 0 · BP 0 · MN 0 · BX 0 · PCK 0 · PRT 0 · TXT 0 · FX 0 · VIS 0/0 · Q FULL · FT --MS'
   ui.spikeIndicator.hidden = true
@@ -1535,11 +1752,103 @@ function resetGame() {
   ui.weaponConfirmation.classList.remove('is-visible')
   pointer.active = false
   keys.clear()
-  reducedEffects = false
+  adaptiveReducedEffects = false
+  syncReducedEffects()
   createBackgroundMarks()
   generateSectorObstacles()
   updateHud()
   lastFrame = performance.now()
+}
+
+function startTrainingRun() {
+  markOnboardingSeen()
+  startMission('rust-basin', true)
+}
+
+function skipMissionBriefing() {
+  markOnboardingSeen()
+  ui.missionBriefing.hidden = true
+  ui.mainMenu.hidden = false
+}
+
+function pauseGame() {
+  if (state.mode !== 'running') return
+  state.mode = 'paused'
+  pointer.active = false
+  keys.clear()
+  clearPauseRestartConfirmation()
+  ui.pauseMenu.hidden = false
+  audio.setPaused(true)
+  updateSettingsUi()
+  updateHud()
+}
+
+function resumeGame() {
+  if (state.mode !== 'paused') return
+  clearPauseRestartConfirmation()
+  ui.pauseMenu.hidden = true
+  state.mode = 'running'
+  audio.setPaused(false)
+  updateHud()
+  lastFrame = performance.now()
+}
+
+function handlePauseRestart() {
+  if (state.mode !== 'paused') return
+  if (!pauseRestartArmed) {
+    pauseRestartArmed = true
+    ui.pauseRestartButton.textContent = 'Confirm Restart'
+    ui.pauseRestartButton.classList.add('is-armed')
+    ui.pauseStatus.textContent =
+      'Press again to discard this run and restart the sector.'
+    return
+  }
+  const trainingRun = state.trainingRun
+  resetGame(trainingRun)
+}
+
+const TRAINING_HINTS = [
+  { time: 9, text: 'Collect GPUs to upgrade' },
+  { time: 32, text: 'Scrap funds Hangar upgrades' },
+  { time: 62, text: 'Reactor cores trigger a risky power surge' },
+]
+
+function queueContextHint(text) {
+  if (!state.trainingRun) return
+  if (!state.contextHintQueue.includes(text)) {
+    state.contextHintQueue.push(text)
+  }
+}
+
+function updateContextHints(dt) {
+  if (!state.trainingRun) return
+  while (
+    state.trainingHintStage < TRAINING_HINTS.length &&
+    state.elapsed >= TRAINING_HINTS[state.trainingHintStage].time
+  ) {
+    queueContextHint(TRAINING_HINTS[state.trainingHintStage].text)
+    state.trainingHintStage += 1
+  }
+
+  if (state.contextHintTime > 0) {
+    state.contextHintTime -= dt
+    if (state.contextHintTime <= 0) {
+      ui.contextHint.classList.remove('is-visible')
+      state.contextHintTime = -0.65
+    }
+    return
+  }
+  if (state.contextHintTime < 0) {
+    state.contextHintTime = Math.min(0, state.contextHintTime + dt)
+    return
+  }
+  if (state.contextHintQueue.length === 0) return
+
+  ui.contextHint.textContent = state.contextHintQueue.shift()
+  ui.contextHint.classList.remove('is-visible')
+  void ui.contextHint.offsetWidth
+  ui.contextHint.classList.add('is-visible')
+  state.contextHintTime = 4.5
 }
 
 function resizeCanvas() {
@@ -1868,13 +2177,24 @@ function updateEffectBudget(rawDt) {
     state.pickups.length >= entityCaps.pickups * 0.65
 
   if (pressure) {
-    if (!reducedEffects) state.effectsModeTransitions += 1
-    reducedEffects = true
+    if (!adaptiveReducedEffects && !preferences.reducedFx) {
+      state.effectsModeTransitions += 1
+    }
+    adaptiveReducedEffects = true
+    syncReducedEffects()
     state.effectsRecoveryClock = REDUCED_EFFECTS_RECOVERY_SECONDS
     return
   }
 
-  if (!reducedEffects) return
+  if (preferences.reducedFx) {
+    adaptiveReducedEffects = false
+    syncReducedEffects()
+    return
+  }
+  if (!adaptiveReducedEffects) {
+    syncReducedEffects()
+    return
+  }
   const safelyBelowBudget =
     state.fps >= 55 &&
     state.frameMs <= 19 &&
@@ -1893,7 +2213,8 @@ function updateEffectBudget(rawDt) {
 
   state.effectsRecoveryClock -= Math.min(rawDt, 0.1)
   if (state.effectsRecoveryClock <= 0) {
-    reducedEffects = false
+    adaptiveReducedEffects = false
+    syncReducedEffects()
     state.effectsModeTransitions += 1
   }
 }
@@ -1911,7 +2232,8 @@ function updatePerformanceReadout(rawDt) {
       state.spikeTimer - Math.min(rawDt, 0.1),
     )
   }
-  const hideSpikeIndicator = state.spikeTimer <= 0
+  const hideSpikeIndicator =
+    !preferences.diagnostics || state.spikeTimer <= 0
   if (ui.spikeIndicator.hidden !== hideSpikeIndicator) {
     ui.spikeIndicator.hidden = hideSpikeIndicator
   }
@@ -1932,6 +2254,7 @@ function updatePerformanceReadout(rawDt) {
 
   if (state.diagnosticsClock >= 0.25) {
     state.diagnosticsClock = 0
+    if (!preferences.diagnostics) return
     let visibleEnemies = 0
     for (const enemy of state.enemies) {
       if (
@@ -1982,6 +2305,7 @@ function updateHud() {
   const player = state.player
   const mission = state.mission
   const sector = getSector()
+  ui.pauseButton.hidden = state.mode !== 'running'
   const healthPercent = Math.max(0, (player.health / player.maxHealth) * 100)
   ui.healthText.textContent = `${Math.ceil(Math.max(0, player.health))} / ${player.maxHealth}`
   ui.healthBar.style.width = `${healthPercent}%`
@@ -2096,7 +2420,13 @@ function renderHangar() {
       const cost = maxed ? {} : upgrade.cost(rank)
       const affordable = !maxed && canAfford(cost)
       return `
-        <article class="hangar-card${maxed ? ' is-maxed' : ''}">
+        <article class="hangar-card${
+          maxed
+            ? ' is-maxed'
+            : affordable
+              ? ' is-affordable'
+              : ' is-unaffordable'
+        }">
           <div class="hangar-card-heading">
             <span class="hangar-icon">${upgrade.icon}</span>
             <div>
@@ -2116,7 +2446,13 @@ function renderHangar() {
             data-hangar-upgrade="${upgrade.id}"
             ${affordable ? '' : 'disabled'}
           >
-            <span>${maxed ? 'Max rank' : 'Install upgrade'}</span>
+            <span>${
+              maxed
+                ? 'Max rank'
+                : affordable
+                  ? 'Install upgrade'
+                  : 'Need resources'
+            }</span>
             <small>${maxed ? 'Fully calibrated' : formatUpgradeCost(cost)}</small>
           </button>
         </article>
@@ -2294,6 +2630,7 @@ function addMissionSalvage(type, amount = 1) {
 
   mission.ready = true
   audio.play('extractionReady')
+  queueContextHint('Call extraction when salvage is ready')
   state.introClock = 0
   ui.onboardingHint.classList.add('is-hidden')
   createFloatingText(
@@ -2460,7 +2797,7 @@ function spawnHarvesterTitan() {
   state.warningFlash = Math.max(state.warningFlash, 1.25)
   addScreenShake(5)
   audio.play('titanDetected')
-  triggerHaptic([38, 35, 48], 'titan-detected', 1000)
+  playHaptic([38, 35, 48], 'titan-detected', 1000)
   createFloatingText(
     'HARVESTER TITAN DETECTED',
     player.x,
@@ -2504,7 +2841,7 @@ function destroyHarvesterTitan() {
   state.kills += 12
   addScreenShake(10)
   audio.play('titanDestroyed')
-  triggerHaptic([55, 35, 70], 'titan-destroyed', 1200)
+  playHaptic([55, 35, 70], 'titan-destroyed', 1200)
   state.warningFlash = Math.max(state.warningFlash, 0.9)
 
   // Scrapping the Titan immediately provides a short pressure-release surge.
@@ -3484,7 +3821,7 @@ function collectReactor(pickup) {
 
 function collectPickup(pickup) {
   pickup.collected = true
-  triggerHaptic(8, 'pickup', 180)
+  playHaptic(8, 'pickup', 180)
 
   if (pickup.type === 'gpu') collectGpu(pickup)
   else if (pickup.type === 'battery') collectBattery(pickup)
@@ -3688,7 +4025,7 @@ function getLevelUpChoices() {
 function openLevelUp() {
   state.mode = 'levelup'
   audio.play('levelUp')
-  triggerHaptic([16, 32, 16], 'level-up', 500)
+  playHaptic([16, 32, 16], 'level-up', 500)
   state.levelUpChoices = getLevelUpChoices()
   ui.upgradeOptions.innerHTML = state.levelUpChoices
     .map(
@@ -3758,7 +4095,7 @@ function applyPlayerDamage(amount) {
     hullHit ? 0.82 : 0.58,
   )
   addScreenShake(hullHit ? 5.5 : 3.2)
-  triggerHaptic(hullHit ? 28 : 18, 'player-hit', 180)
+  playHaptic(hullHit ? 28 : 18, 'player-hit', 180)
   return { shieldDamage, hullDamage }
 }
 
@@ -4488,6 +4825,7 @@ function updateEffects(dt) {
 }
 
 function update(dt, wallDt = dt) {
+  if (state.mode === 'paused') return
   if (state.mode !== 'running') {
     updateEffects(wallDt)
     return
@@ -4499,6 +4837,7 @@ function update(dt, wallDt = dt) {
   state.reactorSurge = Math.max(0, state.reactorSurge - wallDt)
   state.introClock -= dt
   if (state.introClock <= 0) ui.onboardingHint.classList.add('is-hidden')
+  updateContextHints(dt)
   state.hudClock -= wallDt
   updateObstacles(dt)
   updatePlayer(dt)
@@ -5777,8 +6116,9 @@ function render() {
   // which objects cover pickups, hostiles, projectiles, or the player.
   drawSurgePulse()
   ctx.save()
-  const shakeX = state.shake ? (Math.random() - 0.5) * state.shake : 0
-  const shakeY = state.shake ? (Math.random() - 0.5) * state.shake : 0
+  const shakeAmount = state.mode === 'running' ? state.shake : 0
+  const shakeX = shakeAmount ? (Math.random() - 0.5) * shakeAmount : 0
+  const shakeY = shakeAmount ? (Math.random() - 0.5) * shakeAmount : 0
   ctx.translate(shakeX, shakeY)
   drawExtractionBeacon()
   drawObstacles()
@@ -5856,8 +6196,18 @@ window.addEventListener('keydown', (event) => {
     keys.add(event.code)
   }
   if (
+    (event.code === 'Escape' || event.code === 'KeyP') &&
+    (state.mode === 'running' || state.mode === 'paused')
+  ) {
+    event.preventDefault()
+    if (state.mode === 'paused') resumeGame()
+    else pauseGame()
+    return
+  }
+  if (
     event.code === 'Enter' &&
-    (state.mode === 'summary' || state.mode === 'menu') &&
+    (state.mode === 'summary' ||
+      (state.mode === 'menu' && ui.missionBriefing.hidden)) &&
     !event.target.closest?.('button')
   ) {
     showSectorSelect()
@@ -5955,14 +6305,27 @@ ui.hangarStartButton.addEventListener('click', showSectorSelect)
 ui.summaryHangarButton.addEventListener('click', showHangar)
 ui.summaryRestartButton.addEventListener('click', showSectorSelect)
 ui.extractionButton.addEventListener('click', callExtraction)
+ui.pauseButton.addEventListener('click', pauseGame)
+ui.pauseResumeButton.addEventListener('click', resumeGame)
+ui.pauseRestartButton.addEventListener('click', handlePauseRestart)
+ui.pauseMenuButton.addEventListener('click', showMainMenu)
+ui.trainingStartButton.addEventListener('click', startTrainingRun)
+ui.briefingSkipButton.addEventListener('click', skipMissionBriefing)
 ui.soundToggle.addEventListener('click', () => {
   audio.toggle()
-  updateSoundToggle()
+  updateSettingsUi()
 })
+ui.pauseSoundToggle.addEventListener('click', () => {
+  audio.toggle()
+  updateSettingsUi()
+})
+ui.hapticsToggle.addEventListener('click', toggleHaptics)
+ui.reducedFxToggle.addEventListener('click', toggleReducedFx)
+ui.diagnosticsToggle.addEventListener('click', toggleDiagnostics)
 
 const resizeObserver = new ResizeObserver(resizeCanvas)
 resizeObserver.observe(canvas)
 resizeCanvas()
-updateSoundToggle()
+updateSettingsUi()
 showMainMenu()
 requestAnimationFrame(gameLoop)

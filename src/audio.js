@@ -59,6 +59,17 @@ export function createAudioManager() {
   let masterGain = null
   let noiseBuffer = null
   let activeSounds = 0
+  let paused = false
+
+  function applyMasterLevel() {
+    if (!context || !masterGain) return
+    masterGain.gain.cancelScheduledValues(context.currentTime)
+    masterGain.gain.setTargetAtTime(
+      enabled && !paused ? 0.62 : 0.0001,
+      context.currentTime,
+      0.012,
+    )
+  }
 
   function ensureContext() {
     if (!available || !enabled) return null
@@ -66,7 +77,7 @@ export function createAudioManager() {
       if (!context) {
         context = new AudioContextClass()
         masterGain = context.createGain()
-        masterGain.gain.value = 0.62
+        masterGain.gain.value = paused ? 0.0001 : 0.62
         masterGain.connect(context.destination)
 
         const sampleCount = Math.ceil(context.sampleRate * 0.35)
@@ -94,14 +105,8 @@ export function createAudioManager() {
     saveSoundPreference(enabled)
     if (enabled) {
       ensureContext()
-    } else if (context && masterGain) {
-      masterGain.gain.cancelScheduledValues(context.currentTime)
-      masterGain.gain.setTargetAtTime(0.0001, context.currentTime, 0.012)
     }
-    if (enabled && context && masterGain) {
-      masterGain.gain.cancelScheduledValues(context.currentTime)
-      masterGain.gain.setTargetAtTime(0.62, context.currentTime, 0.012)
-    }
+    applyMasterLevel()
     return enabled
   }
 
@@ -541,12 +546,18 @@ export function createAudioManager() {
     }
   }
 
+  function setPaused(nextPaused) {
+    paused = Boolean(nextPaused)
+    applyMasterLevel()
+  }
+
   return {
     isAvailable: () => available,
     isEnabled: () => enabled,
     unlock,
     toggle,
     play,
+    setPaused,
     handleVisibility,
   }
 }
