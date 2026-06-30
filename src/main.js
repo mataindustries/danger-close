@@ -1,4 +1,5 @@
 import './style.css'
+import { createAudioManager, triggerHaptic } from './audio.js'
 
 const app = document.querySelector('#app')
 
@@ -12,9 +13,19 @@ app.innerHTML = `
           <p id="brand-sector">Dead Zone // Rust Basin</p>
         </div>
       </div>
-      <div class="mission-status">
-        <span class="status-dot"></span>
-        <span>Drone online</span>
+      <div class="topbar-actions">
+        <div class="mission-status">
+          <span class="status-dot"></span>
+          <span>Drone online</span>
+        </div>
+        <button
+          id="sound-toggle"
+          class="sound-toggle"
+          type="button"
+          aria-pressed="true"
+        >
+          Sound ON
+        </button>
       </div>
     </header>
 
@@ -235,6 +246,7 @@ const ctx = canvas.getContext('2d')
 
 const ui = {
   brandSector: document.querySelector('#brand-sector'),
+  soundToggle: document.querySelector('#sound-toggle'),
   healthPanel: document.querySelector('.health-panel'),
   healthText: document.querySelector('#health-text'),
   healthBar: document.querySelector('#health-bar'),
@@ -315,6 +327,7 @@ const ui = {
   weaponConfirmation: document.querySelector('#weapon-confirmation'),
 }
 
+const audio = createAudioManager()
 const TAU = Math.PI * 2
 const keys = new Set()
 const movementVector = { x: 0, y: 0 }
@@ -340,6 +353,39 @@ const backgroundLayer = document.createElement('canvas')
 const vignetteLayer = document.createElement('canvas')
 let reducedEffects = false
 let resetSaveArmed = false
+
+const MAX_SCREEN_SHAKE = 10
+const OBSTACLE_DESTROY_SOUNDS = {
+  'scrap-barricade': 'obstacleMetal',
+  'battery-pylon': 'obstacleElectric',
+  'reactor-vent': 'obstacleReactor',
+  'server-rack': 'obstacleData',
+}
+
+function updateSoundToggle() {
+  const available = audio.isAvailable()
+  const enabled = available && audio.isEnabled()
+  ui.soundToggle.disabled = !available
+  ui.soundToggle.textContent = available
+    ? `Sound ${enabled ? 'ON' : 'OFF'}`
+    : 'Sound N/A'
+  ui.soundToggle.setAttribute('aria-pressed', String(enabled))
+}
+
+function addScreenShake(amount) {
+  if (!state || amount <= 0) return
+  const effectScale = reducedEffects ? 0.65 : 1
+  state.shake = Math.min(
+    MAX_SCREEN_SHAKE,
+    state.shake + amount * effectScale,
+  )
+}
+
+function triggerImpactFlash(color, intensity) {
+  if (!state || intensity <= 0) return
+  if (intensity >= state.impactFlash) state.impactFlashColor = color
+  state.impactFlash = Math.max(state.impactFlash, intensity)
+}
 
 const MOBILE_CAPS = {
   enemies: 64,
@@ -852,6 +898,10 @@ function createInitialState() {
     spawnClock: 0.16,
     fireClock: 0,
     shake: 0,
+    impactFlash: 0,
+    impactFlashColor: '255, 255, 255',
+    surgeActivationPulse: 0,
+    extractionCallPulse: 0,
     hudClock: 0,
     introClock: 8,
     targetId: null,
@@ -893,6 +943,7 @@ function createInitialState() {
       extractionActive: false,
       extractionTime: EXTRACTION_DURATION,
       extractionDuration: EXTRACTION_DURATION,
+      lastWarningSecond: null,
     },
     titan: {
       status: 'idle',
@@ -1243,6 +1294,9 @@ function destroyObstacle(obstacle) {
   if (state.targetId === obstacle.id) state.targetId = null
 
   const config = obstacleTypes[obstacle.type]
+  audio.play(
+    OBSTACLE_DESTROY_SOUNDS[obstacle.type] || 'obstacleMetal',
+  )
   const particleCount = reducedEffects ? 5 : 10
   createHitEffect(
     obstacle.x,
@@ -1314,7 +1368,13 @@ function destroyObstacle(obstacle) {
       spawnResourcePickup('gpu', obstacle)
     }
   }
-  state.shake = Math.min(13, state.shake + 2.5)
+  const playerDistance = Math.hypot(
+    state.player.x - obstacle.x,
+    state.player.y - obstacle.y,
+  )
+  if (playerDistance < 300) {
+    addScreenShake(2.8 * (1 - playerDistance / 360))
+  }
 }
 
 function applyObstacleDamage(obstacle, damage) {
@@ -2080,6 +2140,7 @@ function purchaseHangarUpgrade(id) {
   saveData.currencies.reactor -= cost.reactor || 0
   saveData.upgrades[id] = rank + 1
   saveProgress()
+  audio.play('upgradeConfirm')
   renderHangar()
 }
 
@@ -2139,6 +2200,11 @@ function finishRun(success) {
   state.mode = 'summary'
   state.mission.extractionActive = false
   if (!success) state.player.health = 0
+  audio.play(success ? 'victory' : 'gameOver')
+  triggerImpactFlash(
+    success ? '132, 255, 220' : '255, 62, 48',
+    success ? 0.75 : 0.9,
+  )
   pointer.active = false
   keys.clear()
 
@@ -2205,6 +2271,14 @@ function finishRun(success) {
   hideFrontScreens()
   ui.levelUp.hidden = true
   ui.runSummary.hidden = false
+  ui.runSummary.classList.remove(
+    'is-victory-impact',
+    'is-failure-impact',
+  )
+  void ui.runSummary.offsetWidth
+  ui.runSummary.classList.add(
+    success ? 'is-victory-impact' : 'is-failure-impact',
+  )
   updateProfileWallets()
   updateHud()
   lastFrame = performance.now()
@@ -2219,6 +2293,7 @@ function addMissionSalvage(type, amount = 1) {
   if (mission.ready || mission.salvage < mission.required) return
 
   mission.ready = true
+  audio.play('extractionReady')
   state.introClock = 0
   ui.onboardingHint.classList.add('is-hidden')
   createFloatingText(
@@ -2253,6 +2328,10 @@ function callExtraction() {
 
   mission.extractionActive = true
   mission.extractionTime = mission.extractionDuration
+  mission.lastWarningSecond = null
+  state.extractionCallPulse = 1
+  audio.play('extractionCalled')
+  triggerImpactFlash('98, 242, 198', 0.32)
   state.titan.status = 'pending'
   state.titan.spawnTimer = TITAN_SPAWN_DELAY
   state.spawnClock = Math.min(state.spawnClock, 0.18)
@@ -2297,11 +2376,23 @@ function winGame() {
 
 function updateMission(wallDt) {
   if (!state.mission.extractionActive) return
-  state.mission.extractionTime = Math.max(
+  const mission = state.mission
+  const previousSecond = Math.ceil(mission.extractionTime)
+  mission.extractionTime = Math.max(
     0,
-    state.mission.extractionTime - wallDt,
+    mission.extractionTime - wallDt,
   )
-  if (state.mission.extractionTime <= 0) winGame()
+  const currentSecond = Math.ceil(mission.extractionTime)
+  if (
+    currentSecond > 0 &&
+    currentSecond <= 10 &&
+    currentSecond < previousSecond &&
+    mission.lastWarningSecond !== currentSecond
+  ) {
+    mission.lastWarningSecond = currentSecond
+    audio.play('extractionTick')
+  }
+  if (mission.extractionTime <= 0) winGame()
 }
 
 function spawnHarvesterTitan() {
@@ -2367,7 +2458,9 @@ function spawnHarvesterTitan() {
   state.titan.status = 'active'
   state.titan.warningTime = 2.6
   state.warningFlash = Math.max(state.warningFlash, 1.25)
-  state.shake = Math.min(13, state.shake + 5)
+  addScreenShake(5)
+  audio.play('titanDetected')
+  triggerHaptic([38, 35, 48], 'titan-detected', 1000)
   createFloatingText(
     'HARVESTER TITAN DETECTED',
     player.x,
@@ -2395,6 +2488,7 @@ function applyTitanDamage(amount) {
   boss.health -= amount
   boss.flash = 0.14
   if (boss.health <= 0) destroyHarvesterTitan()
+  else audio.play('titanHit')
   return true
 }
 
@@ -2408,7 +2502,9 @@ function destroyHarvesterTitan() {
   state.bossProjectiles.length = 0
   state.bossMines.length = 0
   state.kills += 12
-  state.shake = Math.min(15, state.shake + 11)
+  addScreenShake(10)
+  audio.play('titanDestroyed')
+  triggerHaptic([55, 35, 70], 'titan-destroyed', 1200)
   state.warningFlash = Math.max(state.warningFlash, 0.9)
 
   // Scrapping the Titan immediately provides a short pressure-release surge.
@@ -2416,6 +2512,10 @@ function destroyHarvesterTitan() {
   state.reactorSurge = Math.max(
     state.reactorSurge,
     Math.min(6, state.reactorSurgeDuration),
+  )
+  state.surgeActivationPulse = Math.max(
+    state.surgeActivationPulse,
+    0.72,
   )
   state.reactorEnemyCap = Math.min(
     entityCaps.enemies,
@@ -2476,7 +2576,6 @@ function damagePlayerFromTitan(amount, cooldown = 0.72) {
   const blockedByShield =
     damage.shieldDamage > 0 && damage.hullDamage === 0
   player.hitCooldown = cooldown
-  state.shake = Math.min(13, state.shake + 6)
   createHitEffect(
     player.x,
     player.y,
@@ -3033,6 +3132,7 @@ function fireAtNearestEnemy(target = findNearestEnemy()) {
     life: Math.max(1.25, distance / player.bulletSpeed + 0.4),
   })
   player.muzzleGlow = 0.11
+  audio.play('arcShot')
 
   createMuzzleEffect(
     player.x + directionX * 25,
@@ -3135,6 +3235,7 @@ function destroyEnemy(enemy, suppressEffects = false) {
   if (enemy.dead) return
   enemy.dead = true
   state.kills += enemy.score
+  audio.play('enemyDestroyed')
   if (!suppressEffects) {
     createHitEffect(
       enemy.x,
@@ -3263,6 +3364,7 @@ function spawnResourcePickup(type, source) {
 }
 
 function collectGpu(pickup) {
+  audio.play('pickupGpu')
   state.gpu += 1
   state.totalGpu += 1
   addMissionSalvage('gpu')
@@ -3287,6 +3389,7 @@ function collectGpu(pickup) {
 }
 
 function collectBattery(pickup) {
+  audio.play('pickupBattery')
   const player = state.player
   const charge = 18
   const missingHealth = Math.max(0, player.maxHealth - player.health)
@@ -3313,6 +3416,7 @@ function collectBattery(pickup) {
 }
 
 function collectScrap(pickup) {
+  audio.play('pickupScrap')
   state.scrap += pickup.value
   addMissionSalvage('scrap', pickup.value)
   createHitEffect(pickup.x, pickup.y, '#d9e1df', 5)
@@ -3338,6 +3442,7 @@ function collectScrap(pickup) {
 }
 
 function collectReactor(pickup) {
+  audio.play('pickupReactor')
   state.reactorCoresCollected += 1
   addMissionSalvage('reactor')
   state.reactorSurge = state.reactorSurgeDuration
@@ -3349,7 +3454,9 @@ function collectReactor(pickup) {
     Math.max(state.enemies.length, entityCaps.surge.enemies),
   )
   state.warningFlash = 0.85
-  state.shake = Math.min(12, state.shake + 5)
+  state.surgeActivationPulse = 1
+  addScreenShake(5)
+  triggerImpactFlash('255, 176, 54', 0.62)
   state.introClock = 0
   ui.onboardingHint.classList.add('is-hidden')
 
@@ -3377,6 +3484,7 @@ function collectReactor(pickup) {
 
 function collectPickup(pickup) {
   pickup.collected = true
+  triggerHaptic(8, 'pickup', 180)
 
   if (pickup.type === 'gpu') collectGpu(pickup)
   else if (pickup.type === 'battery') collectBattery(pickup)
@@ -3579,6 +3687,8 @@ function getLevelUpChoices() {
 
 function openLevelUp() {
   state.mode = 'levelup'
+  audio.play('levelUp')
+  triggerHaptic([16, 32, 16], 'level-up', 500)
   state.levelUpChoices = getLevelUpChoices()
   ui.upgradeOptions.innerHTML = state.levelUpChoices
     .map(
@@ -3604,6 +3714,10 @@ function chooseUpgrade(id) {
   const upgrade = state.levelUpChoices.find((item) => item.id === id)
   if (!upgrade) return
   upgrade.apply()
+  audio.play('upgradeConfirm')
+  if (id === 'unlockOrbit' || id === 'addOrbit') {
+    audio.play('orbitUnlock')
+  }
   createFloatingText(
     upgrade.confirmation,
     state.player.x,
@@ -3637,6 +3751,14 @@ function applyPlayerDamage(amount) {
   player.shield -= shieldDamage
   const hullDamage = amount - shieldDamage
   player.health -= hullDamage
+  const hullHit = hullDamage > 0
+  audio.play(hullHit ? 'playerHullHit' : 'playerShieldHit')
+  triggerImpactFlash(
+    hullHit ? '255, 70, 58' : '78, 199, 255',
+    hullHit ? 0.82 : 0.58,
+  )
+  addScreenShake(hullHit ? 5.5 : 3.2)
+  triggerHaptic(hullHit ? 28 : 18, 'player-hit', 180)
   return { shieldDamage, hullDamage }
 }
 
@@ -3815,6 +3937,7 @@ function updateOrbitDrones(dt) {
       enemy.health -= orbit.damage
       enemy.flash = 0.12
       enemy.orbitCooldown = orbit.hitInterval
+      audio.play('enemyHit')
       if (impactEffects < impactEffectBudget) {
         createHitEffect(drone.x, drone.y, '#79f7ff', 3)
         impactEffects += 1
@@ -3885,6 +4008,8 @@ function triggerEmpBurst() {
   const emp = state.emp
   const player = state.player
   emp.clock = emp.cooldown
+  audio.play('emp')
+  triggerImpactFlash('86, 222, 255', 0.2)
 
   addRing({
     kind: 'emp',
@@ -3939,7 +4064,7 @@ function triggerEmpBurst() {
       createHitEffect(boss.x, boss.y, '#77f5ff', 5)
     }
   }
-  state.shake = Math.min(13, state.shake + 1.5)
+  addScreenShake(1.4)
 }
 
 function updateEmp(dt) {
@@ -3992,7 +4117,6 @@ function updateEnemies(dt) {
         const damage = applyPlayerDamage(enemy.damage)
         const blockedByShield = damage.shieldDamage > 0 && damage.hullDamage === 0
         player.hitCooldown = 0.86
-        state.shake = Math.min(13, state.shake + 7)
         createHitEffect(player.x, player.y, blockedByShield ? '#5acbff' : '#ff5e54', 12)
         addRing({
           x: player.x,
@@ -4188,6 +4312,7 @@ function updateBullets(dt) {
       } else {
         hitTarget.health -= bullet.damage
         hitTarget.flash = 0.14
+        audio.play('enemyHit')
         if (hitTarget.health <= 0) destroyEnemy(hitTarget)
       }
 
@@ -4350,6 +4475,15 @@ function updateEffects(dt) {
   const floatingTextCap = getVisualEffectCap('floatingTexts')
   trimOldestInPlace(floatingTexts, floatingTextCap)
   state.warningFlash = Math.max(0, state.warningFlash - dt * 1.8)
+  state.impactFlash = Math.max(0, state.impactFlash - dt * 3.8)
+  state.surgeActivationPulse = Math.max(
+    0,
+    state.surgeActivationPulse - dt * 1.55,
+  )
+  state.extractionCallPulse = Math.max(
+    0,
+    state.extractionCallPulse - dt * 1.4,
+  )
   state.shake = Math.max(0, state.shake - dt * 24)
 }
 
@@ -5456,7 +5590,8 @@ function drawPlayer() {
 
 function drawEffects() {
   for (const ring of state.rings) {
-    ctx.globalAlpha = Math.max(0, ring.life / ring.maxLife)
+    const ringAlpha = Math.max(0, ring.life / ring.maxLife)
+    ctx.globalAlpha = ringAlpha
     ctx.strokeStyle = ring.color
     ctx.lineWidth = ring.kind === 'emp' ? 3 : 2
     if (ring.kind === 'emp') {
@@ -5466,6 +5601,19 @@ function drawEffects() {
     ctx.beginPath()
     ctx.arc(ring.x, ring.y, ring.currentRadius || ring.radius, 0, TAU)
     ctx.stroke()
+    if (ring.kind === 'emp') {
+      ctx.globalAlpha = ringAlpha * 0.38
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.arc(
+        ring.x,
+        ring.y,
+        (ring.currentRadius || ring.radius) * 0.9,
+        0,
+        TAU,
+      )
+      ctx.stroke()
+    }
     ctx.shadowBlur = 0
   }
   ctx.globalAlpha = 1
@@ -5505,8 +5653,9 @@ function drawSurgePulse() {
   if (!isReactorSurging()) return
 
   const pulse = (Math.sin(state.elapsed * 7.5) + 1) * 0.5
+  const activation = state.surgeActivationPulse
   ctx.save()
-  ctx.globalAlpha = 0.025 + pulse * 0.018
+  ctx.globalAlpha = 0.025 + pulse * 0.018 + activation * 0.1
   ctx.fillStyle = '#ff9e32'
   ctx.fillRect(0, 0, width, height)
   ctx.globalAlpha = 0.22 + pulse * 0.18
@@ -5521,6 +5670,19 @@ function drawSurgePulse() {
     TAU,
   )
   ctx.stroke()
+  if (activation > 0) {
+    ctx.globalAlpha = activation * 0.65
+    ctx.lineWidth = reducedEffects ? 2 : 3
+    ctx.beginPath()
+    ctx.arc(
+      state.player.x,
+      state.player.y,
+      36 + (1 - activation) * Math.min(width, height) * 0.38,
+      0,
+      TAU,
+    )
+    ctx.stroke()
+  }
   ctx.restore()
 }
 
@@ -5539,6 +5701,14 @@ function drawExtractionBeacon() {
   ctx.beginPath()
   ctx.arc(0, 0, radius, 0, TAU)
   ctx.stroke()
+  if (state.extractionCallPulse > 0) {
+    const callPulse = state.extractionCallPulse
+    ctx.globalAlpha = callPulse * 0.6
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(0, 0, 74 + (1 - callPulse) * 105, 0, TAU)
+    ctx.stroke()
+  }
   ctx.shadowBlur = 0
 
   ctx.globalAlpha = 0.5 + pulse * 0.25
@@ -5556,10 +5726,26 @@ function drawExtractionBeacon() {
 
 function drawExtractionBorder() {
   if (!state.mission.extractionActive) return
-  const pulse = (Math.sin(state.elapsed * 3.5) + 1) * 0.5
-  ctx.strokeStyle = `rgba(111, 244, 201, ${0.14 + pulse * 0.16})`
-  ctx.lineWidth = 2
+  const finalSeconds = state.mission.extractionTime <= 10
+  const pulseSpeed = finalSeconds ? 8 : 3.5
+  const pulse = (Math.sin(state.elapsed * pulseSpeed) + 1) * 0.5
+  ctx.strokeStyle = finalSeconds
+    ? `rgba(255, 174, 74, ${0.15 + pulse * 0.25})`
+    : `rgba(111, 244, 201, ${0.14 + pulse * 0.16})`
+  ctx.lineWidth = finalSeconds ? 3 : 2
   ctx.strokeRect(5, 5, width - 10, height - 10)
+}
+
+function drawImpactFlash() {
+  if (state.impactFlash <= 0) return
+  const alpha = state.impactFlash
+  ctx.fillStyle =
+    `rgba(${state.impactFlashColor}, ${alpha * 0.12})`
+  ctx.fillRect(0, 0, width, height)
+  ctx.strokeStyle =
+    `rgba(${state.impactFlashColor}, ${alpha * 0.58})`
+  ctx.lineWidth = 4
+  ctx.strokeRect(2, 2, width - 4, height - 4)
 }
 
 function drawTouchControl() {
@@ -5609,6 +5795,7 @@ function render() {
   ctx.restore()
   drawTouchControl()
   drawExtractionBorder()
+  drawImpactFlash()
 
   if (state.warningFlash > 0) {
     const alpha = state.warningFlash * 0.13
@@ -5643,6 +5830,15 @@ function pointerPosition(event) {
     y: event.clientY - rect.top,
   }
 }
+
+// Browsers require a trusted gesture before Web Audio can run. Reusing this
+// unlock path is harmless after the shared context is active.
+document.addEventListener('pointerdown', () => audio.unlock(), {
+  capture: true,
+})
+document.addEventListener('keydown', () => audio.unlock(), {
+  capture: true,
+})
 
 window.addEventListener('keydown', (event) => {
   const movementKeys = [
@@ -5699,6 +5895,7 @@ document.addEventListener('visibilitychange', () => {
     state.fpsFrames = 0
     state.fpsTime = 0
   }
+  audio.handleVisibility(document.hidden)
 })
 
 canvas.addEventListener('pointerdown', (event) => {
@@ -5758,9 +5955,14 @@ ui.hangarStartButton.addEventListener('click', showSectorSelect)
 ui.summaryHangarButton.addEventListener('click', showHangar)
 ui.summaryRestartButton.addEventListener('click', showSectorSelect)
 ui.extractionButton.addEventListener('click', callExtraction)
+ui.soundToggle.addEventListener('click', () => {
+  audio.toggle()
+  updateSoundToggle()
+})
 
 const resizeObserver = new ResizeObserver(resizeCanvas)
 resizeObserver.observe(canvas)
 resizeCanvas()
+updateSoundToggle()
 showMainMenu()
 requestAnimationFrame(gameLoop)

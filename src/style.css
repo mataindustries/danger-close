@@ -120,6 +120,12 @@ button {
   text-transform: uppercase;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .mission-status {
   display: flex;
   align-items: center;
@@ -128,6 +134,37 @@ button {
   font-size: 0.64rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
+}
+
+.sound-toggle {
+  min-width: 88px;
+  min-height: 36px;
+  padding: 7px 10px;
+  color: #9bd8d9;
+  border: 1px solid rgba(112, 237, 244, 0.28);
+  border-radius: 0;
+  background: rgba(8, 22, 24, 0.82);
+  cursor: pointer;
+  font-size: 0.55rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  touch-action: manipulation;
+}
+
+.sound-toggle[aria-pressed='false'] {
+  color: #718487;
+  border-color: rgba(125, 151, 153, 0.2);
+}
+
+.sound-toggle:focus-visible {
+  outline: 1px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.sound-toggle:disabled {
+  color: #526164;
+  cursor: default;
+  opacity: 0.65;
 }
 
 .status-dot {
@@ -935,7 +972,37 @@ button {
       transparent 0,
       transparent 72px,
       rgba(112, 237, 244, 0.025) 73px
-    );
+  );
+}
+
+#run-summary .summary-panel {
+  z-index: 1;
+}
+
+#run-summary::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+}
+
+#run-summary.is-victory-impact::before {
+  background: linear-gradient(
+    to bottom,
+    transparent 0,
+    rgba(122, 255, 218, 0.08) 42%,
+    rgba(182, 255, 235, 0.48) 50%,
+    rgba(122, 255, 218, 0.08) 58%,
+    transparent 100%
+  );
+  animation: summary-signal-sweep 620ms ease-out;
+}
+
+#run-summary.is-failure-impact::before {
+  background: rgba(203, 38, 28, 0.26);
+  animation: summary-failure-flicker 480ms steps(2, end);
 }
 
 .menu-panel {
@@ -1796,6 +1863,37 @@ button {
   }
 }
 
+@keyframes summary-signal-sweep {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  22% {
+    opacity: 1;
+  }
+  to {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+
+@keyframes summary-failure-flicker {
+  0%,
+  35% {
+    opacity: 0.7;
+  }
+  18%,
+  58% {
+    opacity: 0.12;
+  }
+  78% {
+    opacity: 0.45;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 @media (max-width: 760px) {
   .game-shell {
     min-height: 500px;
@@ -1844,6 +1942,17 @@ button {
 
   .mission-status {
     font-size: 0.52rem;
+  }
+
+  .topbar-actions {
+    gap: 10px;
+  }
+
+  .sound-toggle {
+    min-width: 78px;
+    min-height: 42px;
+    padding-inline: 8px;
+    font-size: 0.5rem;
   }
 
   .arena {
@@ -2209,6 +2318,10 @@ button {
   .weapon-card,
   .weapon-confirmation {
     transition: none;
+    animation: none;
+  }
+
+  #run-summary::before {
     animation: none;
   }
 }
