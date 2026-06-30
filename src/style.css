@@ -974,7 +974,7 @@ button {
 
 .sector-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-top: 24px;
 }
@@ -1059,6 +1059,19 @@ button {
     linear-gradient(145deg, #332b16, #130d0b);
 }
 
+.sector-card[data-sector='dead-datacenter'] .sector-card-visual {
+  background:
+    radial-gradient(circle at 78% 27%, rgba(135, 35, 46, 0.18), transparent 16%),
+    repeating-linear-gradient(
+      90deg,
+      rgba(21, 55, 66, 0.34) 0,
+      rgba(21, 55, 66, 0.34) 12px,
+      rgba(3, 10, 14, 0.52) 13px,
+      rgba(3, 10, 14, 0.52) 25px
+    ),
+    linear-gradient(145deg, #10262f, #050b0f);
+}
+
 .sector-card-visual > span {
   position: absolute;
   z-index: 1;
@@ -1090,6 +1103,10 @@ button {
 
 .sector-card[data-sector='reactor-dead-zone'] .sector-card-visual > i {
   background: #d7c64e;
+}
+
+.sector-card[data-sector='dead-datacenter'] .sector-card-visual > i {
+  background: #52c9e8;
 }
 
 .sector-card-heading {

@@ -565,6 +565,57 @@ const sectors = [
       accent: '#d7c64e',
     },
   },
+  {
+    id: 'dead-datacenter',
+    code: 'DC-13',
+    name: 'Dead Datacenter',
+    difficulty: 'Medium / High',
+    description:
+      'An abandoned compute vault packed with dead server racks, fried GPUs, and rogue security bots.',
+    modifiers: [
+      'More GPUs',
+      'More scouts',
+      'GPU reward bonus',
+      'Server rack obstacles',
+    ],
+    gameplay: {
+      missionRequirementMultiplier: 1.12,
+      spawnIntervalMultiplier: 1,
+      enemyCapBonus: 0,
+      scoutChanceMultiplier: 1.32,
+      heavyChanceMultiplier: 0.86,
+      startingShieldBonus: 0,
+      surgeDurationBonus: 0,
+      dropMultipliers: {
+        gpu: 1.75,
+        scrap: 0.84,
+        battery: 0.86,
+        reactor: 0.92,
+      },
+      rewardBonus: { scrap: 0, gpu: 3, reactor: 0 },
+    },
+    obstacles: {
+      type: 'server-rack',
+      minCount: 6,
+      maxCount: 9,
+      layout: 'rows',
+      startClearance: 82,
+    },
+    visual: {
+      seed: 31991,
+      center: '#101c22',
+      middle: '#091116',
+      edge: '#04080b',
+      gridRgb: '43, 103, 123',
+      markRgb: '47, 91, 108',
+      debrisRgb: '53, 86, 98',
+      dustColor: '#7898a1',
+      glowRgb: '28, 125, 156',
+      effect: 'datacenter',
+      accent: '#52c9e8',
+      gridSize: 42,
+    },
+  },
 ]
 
 const sectorsById = Object.fromEntries(
@@ -768,6 +819,19 @@ const obstacleTypes = {
     burstRadius: 126,
     burstDamage: 62,
   },
+  'server-rack': {
+    health: 112,
+    minRadius: 24,
+    maxRadius: 29,
+    label: 'CACHE BREACHED',
+    effectColor: '#54cbe8',
+    burstRadius: 102,
+    burstDamage: 34,
+    salvageDropChance: 0.72,
+    gpuDropChance: 0.69,
+    gpuCacheChance: 0.1,
+    bossProjectileDamage: 24,
+  },
 }
 
 function createInitialState() {
@@ -912,6 +976,7 @@ function generateSectorObstacles() {
   state.obstacles.length = 0
   const sectorConfig = getSector().obstacles
   const typeConfig = obstacleTypes[sectorConfig.type]
+  const rowLayout = sectorConfig.layout === 'rows'
   const areaFactor = Math.max(
     0,
     Math.min(1, (width * height - 115200) / 500000),
@@ -928,7 +993,10 @@ function generateSectorObstacles() {
   const centerX = width * 0.5
   const centerY = height * 0.5
   const compactArena = Math.min(width, height) < 520
-  const centerClearance = compactArena ? 55 : 108
+  const centerClearance = Math.max(
+    compactArena ? 55 : 108,
+    sectorConfig.startClearance || 0,
+  )
   const corridorHalfWidth = compactArena ? 32 : 42
   const verticalCorridor = nextObstacleRandom() < 0.5
   const maxAttempts = desiredCount * 80
@@ -942,8 +1010,25 @@ function generateSectorObstacles() {
       typeConfig.minRadius +
       nextObstacleRandom() * (typeConfig.maxRadius - typeConfig.minRadius)
     const margin = radius + state.player.radius * 2 + 10
-    const x = margin + nextObstacleRandom() * Math.max(1, width - margin * 2)
-    const y = margin + nextObstacleRandom() * Math.max(1, height - margin * 2)
+    let x = margin + nextObstacleRandom() * Math.max(1, width - margin * 2)
+    let y = margin + nextObstacleRandom() * Math.max(1, height - margin * 2)
+    if (rowLayout) {
+      const rowCount = compactArena ? 2 : 4
+      const row = Math.floor(nextObstacleRandom() * rowCount)
+      const rowFraction =
+        rowCount === 2 ? (row === 0 ? 0.08 : 0.92) : 0.1 + (row / 3) * 0.8
+      if (verticalCorridor) {
+        x =
+          margin +
+          rowFraction * Math.max(1, width - margin * 2) +
+          (nextObstacleRandom() - 0.5) * 8
+      } else {
+        y =
+          margin +
+          rowFraction * Math.max(1, height - margin * 2) +
+          (nextObstacleRandom() - 0.5) * 8
+      }
+    }
     const centerDx = x - centerX
     const centerDy = y - centerY
     const centerDistance = centerClearance + radius
@@ -980,7 +1065,10 @@ function generateSectorObstacles() {
       radius,
       health: typeConfig.health,
       maxHealth: typeConfig.health,
-      rotation: nextObstacleRandom() * TAU,
+      rotation: rowLayout
+        ? (verticalCorridor ? 0 : Math.PI / 2) +
+          (nextObstacleRandom() - 0.5) * 0.08
+        : nextObstacleRandom() * TAU,
       phase: nextObstacleRandom() * TAU,
       detail: nextObstacleRandom(),
       flash: 0,
@@ -1012,6 +1100,14 @@ function generateSectorObstacles() {
         ]
 
     for (const [x, y] of crossPositions) {
+      if (rowLayout) {
+        const dx = x - centerX
+        const dy = y - centerY
+        const startClearDistance = centerClearance + radius
+        if (dx * dx + dy * dy < startClearDistance * startClearDistance) {
+          continue
+        }
+      }
       state.obstacles.push({
         id: state.nextEntityId++,
         type: sectorConfig.type,
@@ -1022,7 +1118,11 @@ function generateSectorObstacles() {
         radius,
         health: typeConfig.health,
         maxHealth: typeConfig.health,
-        rotation: nextObstacleRandom() * TAU,
+        rotation: rowLayout
+          ? verticalCorridor
+            ? 0
+            : Math.PI / 2
+          : nextObstacleRandom() * TAU,
         phase: nextObstacleRandom() * TAU,
         detail: nextObstacleRandom(),
         flash: 0,
@@ -1199,6 +1299,20 @@ function destroyObstacle(obstacle) {
       updateHud()
     }
     if (Math.random() < 0.2) spawnResourcePickup('reactor', obstacle)
+  } else if (obstacle.type === 'server-rack') {
+    damageEnemiesInObstacleBurst(
+      obstacle,
+      config.burstRadius,
+      config.burstDamage,
+    )
+    if (Math.random() < config.salvageDropChance) {
+      const salvageType =
+        Math.random() < config.gpuDropChance ? 'gpu' : 'scrap'
+      spawnResourcePickup(salvageType, obstacle)
+    }
+    if (Math.random() < config.gpuCacheChance) {
+      spawnResourcePickup('gpu', obstacle)
+    }
   }
   state.shake = Math.min(13, state.shake + 2.5)
 }
@@ -1515,7 +1629,7 @@ function rebuildBackgroundLayers() {
   backgroundContext.fillStyle = gradient
   backgroundContext.fillRect(0, 0, width, height)
 
-  const gridSize = 56
+  const gridSize = visual.gridSize || 56
   backgroundContext.lineWidth = 1
   for (let x = 0; x <= width; x += gridSize) {
     backgroundContext.strokeStyle =
@@ -1536,6 +1650,29 @@ function rebuildBackgroundLayers() {
     backgroundContext.moveTo(0, y)
     backgroundContext.lineTo(width, y)
     backgroundContext.stroke()
+  }
+
+  if (visual.effect === 'datacenter') {
+    const rowSpacing = gridSize * 2.5
+    for (let x = gridSize * 0.7, row = 0; x < width; x += rowSpacing, row += 1) {
+      backgroundContext.fillStyle = 'rgba(1, 5, 8, 0.34)'
+      backgroundContext.fillRect(x, 0, 22, height)
+      backgroundContext.strokeStyle = 'rgba(61, 151, 176, 0.1)'
+      backgroundContext.beginPath()
+      backgroundContext.moveTo(x, 0)
+      backgroundContext.lineTo(x, height)
+      backgroundContext.moveTo(x + 22, 0)
+      backgroundContext.lineTo(x + 22, height)
+      backgroundContext.stroke()
+
+      for (let y = 24; y < height; y += 72) {
+        backgroundContext.fillStyle =
+          row % 3 === 2 && Math.floor(y / 72) % 4 === 1
+            ? 'rgba(155, 48, 48, 0.16)'
+            : 'rgba(65, 174, 202, 0.1)'
+        backgroundContext.fillRect(x + 6, y, 10, 2)
+      }
+    }
   }
 
   for (const mark of backgroundMarks) {
@@ -2501,7 +2638,8 @@ function updateTitanHazards(dt) {
       continue
     }
 
-    let blockedByObstacle = false
+    let hitObstacle = null
+    let obstacleHitTime = Infinity
     for (const obstacle of state.obstacles) {
       if (obstacle.dead) continue
       const hitTime = segmentCircleHitTime(
@@ -2513,12 +2651,23 @@ function updateTitanHazards(dt) {
         obstacle.y,
         projectile.radius + obstacle.radius,
       )
-      if (hitTime !== Infinity) {
-        blockedByObstacle = true
-        break
+      if (hitTime < obstacleHitTime) {
+        obstacleHitTime = hitTime
+        hitObstacle = obstacle
       }
     }
-    if (blockedByObstacle) continue
+    if (hitObstacle) {
+      projectile.x =
+        previousX + (projectile.x - previousX) * obstacleHitTime
+      projectile.y =
+        previousY + (projectile.y - previousY) * obstacleHitTime
+      const bossProjectileDamage =
+        obstacleTypes[hitObstacle.type].bossProjectileDamage || 0
+      if (bossProjectileDamage > 0) {
+        applyObstacleDamage(hitObstacle, bossProjectileDamage)
+      }
+      continue
+    }
 
     const dx = player.x - projectile.x
     const dy = player.y - projectile.y
@@ -4239,6 +4388,22 @@ function update(dt, wallDt = dt) {
 
 function drawSectorAtmosphere() {
   const visual = getSector().visual
+  if (visual.effect === 'datacenter') {
+    ctx.save()
+    const scanY = (state.elapsed * 13) % (height + 120) - 60
+    ctx.globalAlpha = reducedEffects ? 0.025 : 0.045
+    ctx.fillStyle = '#45b7d4'
+    ctx.fillRect(0, scanY, width, 1)
+    if (!reducedEffects) {
+      const warningPulse = (Math.sin(state.elapsed * 0.82) + 1) * 0.5
+      ctx.globalAlpha = 0.008 + warningPulse * 0.012
+      ctx.fillStyle = '#8f252d'
+      ctx.fillRect(0, 0, width, height)
+    }
+    ctx.restore()
+    return
+  }
+
   if (visual.effect === 'electric') {
     if (reducedEffects) return
     ctx.save()
@@ -4462,6 +4627,51 @@ function drawReactorVent(obstacle) {
   ctx.fill()
 }
 
+function drawServerRack(obstacle) {
+  const radius = obstacle.radius
+  const rackWidth = radius * 1.2
+  const rackHeight = radius * 1.82
+  const pulse = (Math.sin(obstacle.phase * 1.25) + 1) * 0.5
+
+  ctx.fillStyle = '#091116'
+  ctx.strokeStyle = obstacle.flash > 0 ? '#e9fbff' : '#020609'
+  ctx.lineWidth = obstacle.flash > 0 ? 4 : 3
+  ctx.fillRect(-rackWidth * 0.5, -rackHeight * 0.5, rackWidth, rackHeight)
+  ctx.strokeRect(-rackWidth * 0.5, -rackHeight * 0.5, rackWidth, rackHeight)
+
+  ctx.fillStyle = '#15242b'
+  ctx.fillRect(
+    -rackWidth * 0.39,
+    -rackHeight * 0.39,
+    rackWidth * 0.78,
+    rackHeight * 0.78,
+  )
+  ctx.fillStyle = '#071014'
+  const bayHeight = rackHeight * 0.125
+  for (let index = 0; index < 5; index += 1) {
+    const y = -rackHeight * 0.34 + index * rackHeight * 0.155
+    ctx.fillRect(-rackWidth * 0.31, y, rackWidth * 0.62, bayHeight)
+  }
+
+  ctx.shadowColor = '#54cbe8'
+  ctx.shadowBlur = reducedEffects ? 0 : 3 + pulse * 2
+  ctx.fillStyle = '#56d2ee'
+  ctx.fillRect(-rackWidth * 0.24, -rackHeight * 0.3, rackWidth * 0.28, 2)
+  ctx.fillRect(-rackWidth * 0.24, rackHeight * 0.01, rackWidth * 0.38, 2)
+  ctx.fillRect(-rackWidth * 0.24, rackHeight * 0.32, rackWidth * 0.22, 2)
+  ctx.shadowBlur = 0
+
+  ctx.fillStyle =
+    obstacle.detail > 0.58 && pulse > 0.35 ? '#d84b54' : '#28343a'
+  ctx.fillRect(rackWidth * 0.2, -rackHeight * 0.3, 3, 3)
+  ctx.strokeStyle = 'rgba(98, 156, 170, 0.35)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(-rackWidth * 0.42, rackHeight * 0.43)
+  ctx.lineTo(rackWidth * 0.42, rackHeight * 0.43)
+  ctx.stroke()
+}
+
 function drawObstacle(obstacle) {
   if (obstacle.dead) return
   ctx.save()
@@ -4486,7 +4696,8 @@ function drawObstacle(obstacle) {
 
   if (obstacle.type === 'scrap-barricade') drawScrapBarricade(obstacle)
   else if (obstacle.type === 'battery-pylon') drawBatteryPylon(obstacle)
-  else drawReactorVent(obstacle)
+  else if (obstacle.type === 'reactor-vent') drawReactorVent(obstacle)
+  else drawServerRack(obstacle)
   ctx.restore()
   drawObstacleHealthBar(obstacle)
 }
