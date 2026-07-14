@@ -2,6 +2,8 @@ const SOUND_PREFERENCE_KEY = 'danger-close-sound-v1'
 const MAX_ACTIVE_SOUNDS = 7
 const SOUND_SETTINGS = {
   arcShot: [0.11, 0.07],
+  explosion: [0.075, 0.34],
+  explosionLarge: [0.28, 0.72],
   enemyHit: [0.12, 0.045],
   enemyDestroyed: [0.12, 0.14],
   pickupGpu: [0.045, 0.16],
@@ -201,12 +203,78 @@ export function createAudioManager() {
 
     switch (name) {
       case 'arcShot':
+        noise({
+          duration: 0.028,
+          gain: 0.022,
+          frequency: 3100,
+          filterType: 'bandpass',
+        })
         tone({
-          frequency: 920,
-          endFrequency: 520,
-          duration: 0.055,
-          gain: 0.018,
+          frequency: 980,
+          endFrequency: 470,
+          duration: 0.065,
+          gain: 0.022,
           type: 'triangle',
+        })
+        tone({
+          frequency: 138,
+          endFrequency: 76,
+          duration: 0.09,
+          gain: 0.02,
+          type: 'sawtooth',
+        })
+        break
+      case 'explosion':
+        noise({ duration: 0.16, gain: 0.05, frequency: 1200 })
+        noise({
+          duration: 0.24,
+          gain: 0.022,
+          frequency: 460,
+          delay: 0.055,
+        })
+        tone({
+          frequency: 128,
+          endFrequency: 43,
+          duration: 0.28,
+          gain: 0.045,
+          type: 'sawtooth',
+        })
+        tone({
+          frequency: 72,
+          endFrequency: 38,
+          duration: 0.22,
+          gain: 0.025,
+          delay: 0.08,
+        })
+        break
+      case 'explosionLarge':
+        noise({ duration: 0.34, gain: 0.075, frequency: 980 })
+        noise({
+          duration: 0.5,
+          gain: 0.028,
+          frequency: 360,
+          delay: 0.12,
+        })
+        tone({
+          frequency: 94,
+          endFrequency: 28,
+          duration: 0.62,
+          gain: 0.072,
+          type: 'sawtooth',
+        })
+        tone({
+          frequency: 210,
+          endFrequency: 74,
+          duration: 0.24,
+          gain: 0.032,
+          type: 'square',
+        })
+        tone({
+          frequency: 58,
+          endFrequency: 30,
+          duration: 0.42,
+          gain: 0.034,
+          delay: 0.2,
         })
         break
       case 'enemyHit':

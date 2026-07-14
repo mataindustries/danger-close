@@ -404,6 +404,9 @@ const SETTINGS_KEY = 'danger-close-settings-v1'
 const HAPTICS_AVAILABLE =
   typeof navigator.vibrate === 'function' &&
   (navigator.maxTouchPoints || 0) > 0
+const SYSTEM_REDUCED_MOTION = window.matchMedia(
+  '(prefers-reduced-motion: reduce)',
+).matches
 
 function loadPreferences() {
   const defaults = {
@@ -446,6 +449,18 @@ const pointer = {
   x: 0,
   y: 0,
 }
+const performanceMetrics = {
+  fps: 60,
+  frameMs: 16.7,
+  workMs: 0,
+  quality: 'full',
+  particles: 0,
+  enemies: 0,
+  bullets: 0,
+  lights: 0,
+  explosions: 0,
+}
+window.__DANGER_CLOSE_PERF__ = performanceMetrics
 
 let width = 0
 let height = 0
@@ -458,6 +473,8 @@ let ambientGlows = []
 let sectorArcs = []
 const backgroundLayer = document.createElement('canvas')
 const vignetteLayer = document.createElement('canvas')
+const particlePool = []
+const lightSpriteCache = new Map()
 let adaptiveReducedEffects = false
 let reducedEffects = preferences.reducedFx
 let resetSaveArmed = false
@@ -487,7 +504,8 @@ function updateSoundToggle() {
 }
 
 function syncReducedEffects() {
-  reducedEffects = preferences.reducedFx || adaptiveReducedEffects
+  reducedEffects =
+    preferences.reducedFx || SYSTEM_REDUCED_MOTION || adaptiveReducedEffects
 }
 
 function updateSettingsUi() {
@@ -501,10 +519,10 @@ function updateSettingsUi() {
     String(HAPTICS_AVAILABLE && preferences.haptics),
   )
   ui.reducedFxToggle.textContent =
-    `Reduced FX ${preferences.reducedFx ? 'ON' : 'OFF'}`
+    `Reduced Motion ${preferences.reducedFx ? 'ON' : SYSTEM_REDUCED_MOTION ? 'SYSTEM' : 'OFF'}`
   ui.reducedFxToggle.setAttribute(
     'aria-pressed',
-    String(preferences.reducedFx),
+    String(preferences.reducedFx || SYSTEM_REDUCED_MOTION),
   )
   ui.diagnosticsToggle.textContent =
     `Show Diagnostics ${preferences.diagnostics ? 'ON' : 'OFF'}`
@@ -517,7 +535,7 @@ function updateSettingsUi() {
     !preferences.diagnostics || !state || state.spikeTimer <= 0
   ui.gameShell.classList.toggle(
     'user-reduced-fx',
-    preferences.reducedFx,
+    preferences.reducedFx || SYSTEM_REDUCED_MOTION,
   )
   syncReducedEffects()
 }
@@ -555,6 +573,7 @@ function toggleDiagnostics() {
 
 function addScreenShake(amount) {
   if (!state || amount <= 0) return
+  if (preferences.reducedFx || SYSTEM_REDUCED_MOTION) return
   const effectScale = reducedEffects ? 0.65 : 1
   state.shake = Math.min(
     MAX_SCREEN_SHAKE,
@@ -580,6 +599,10 @@ const MOBILE_CAPS = {
   particles: 130,
   rings: 28,
   floatingTexts: 18,
+  explosions: 8,
+  lights: 12,
+  wreckage: 18,
+  scorches: 18,
   reducedEffectsEnemies: 42,
   surge: {
     enemies: 48,
@@ -593,6 +616,10 @@ const MOBILE_CAPS = {
     particles: 52,
     rings: 16,
     floatingTexts: 10,
+    explosions: 4,
+    lights: 7,
+    wreckage: 10,
+    scorches: 14,
   },
 }
 
@@ -608,6 +635,10 @@ const DESKTOP_CAPS = {
   particles: 220,
   rings: 45,
   floatingTexts: 26,
+  explosions: 14,
+  lights: 20,
+  wreckage: 30,
+  scorches: 28,
   reducedEffectsEnemies: 68,
   surge: {
     enemies: 72,
@@ -621,6 +652,10 @@ const DESKTOP_CAPS = {
     particles: 90,
     rings: 24,
     floatingTexts: 14,
+    explosions: 7,
+    lights: 10,
+    wreckage: 16,
+    scorches: 20,
   },
 }
 
@@ -1083,6 +1118,16 @@ function createInitialState() {
     spawnClock: 0.16,
     fireClock: 0,
     shake: 0,
+    camera: {
+      x: 0,
+      y: 0,
+      impulseX: 0,
+      impulseY: 0,
+      zoom: 1,
+      targetZoom: 1,
+      recoil: 0,
+    },
+    hitStop: 0,
     impactFlash: 0,
     impactFlashColor: '255, 255, 255',
     surgeActivationPulse: 0,
@@ -1113,6 +1158,7 @@ function createInitialState() {
     fpsFrames: 0,
     fpsTime: 0,
     frameMs: 16.7,
+    workMs: 0,
     diagnosticsClock: 0,
     spikeTimer: 0,
     effectsRecoveryClock: 0,
@@ -1156,6 +1202,8 @@ function createInitialState() {
       angle: -Math.PI / 2,
       rotorPhase: 0,
       muzzleGlow: 0,
+      muzzleVariant: 0,
+      recoil: 0,
       moveX: 0,
       moveY: 0,
     },
@@ -1186,6 +1234,12 @@ function createInitialState() {
     particles: [],
     rings: [],
     floatingTexts: [],
+    explosions: [],
+    lights: [],
+    wreckage: [],
+    scorches: [],
+    environmentClock: 4 + Math.random() * 6,
+    killConfirm: 0,
   }
 }
 
@@ -1482,6 +1536,10 @@ function destroyObstacle(obstacle) {
   audio.play(
     OBSTACLE_DESTROY_SOUNDS[obstacle.type] || 'obstacleMetal',
   )
+  createExplosion(obstacle.x, obstacle.y, {
+    scale: obstacle.type === 'reactor-vent' ? 1.45 : 1.08,
+    color: config.effectColor,
+  })
   const particleCount = reducedEffects ? 5 : 10
   createHitEffect(
     obstacle.x,
@@ -1861,7 +1919,9 @@ function resizeCanvas() {
   const useMobileProfile =
     width < 760 || window.matchMedia('(pointer: coarse)').matches
   entityCaps = useMobileProfile ? MOBILE_CAPS : DESKTOP_CAPS
-  dpr = Math.min(window.devicePixelRatio || 1, useMobileProfile ? 1.6 : 2)
+  // Mobile fill-rate is the hard constraint. CSS sizing still matches the
+  // device viewport; a 1x backing store avoids high-DPR overdraw and hitches.
+  dpr = Math.min(window.devicePixelRatio || 1, useMobileProfile ? 1 : 2)
   canvas.width = Math.round(width * dpr)
   canvas.height = Math.round(height * dpr)
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -2174,7 +2234,10 @@ function updateEffectBudget(rawDt) {
     state.bullets.length >= entityCaps.bullets * 0.75 ||
     state.bossProjectiles.length >= entityCaps.bossProjectiles * 0.8 ||
     state.bossEffects.length >= entityCaps.bossEffects * 0.8 ||
-    state.pickups.length >= entityCaps.pickups * 0.65
+    state.pickups.length >= entityCaps.pickups * 0.65 ||
+    state.lights.length >= entityCaps.lights * 0.75 ||
+    state.explosions.length >= entityCaps.explosions * 0.7 ||
+    state.wreckage.length >= entityCaps.wreckage * 0.78
 
   if (pressure) {
     if (!adaptiveReducedEffects && !preferences.reducedFx) {
@@ -2204,7 +2267,10 @@ function updateEffectBudget(rawDt) {
     state.bullets.length < entityCaps.bullets * 0.6 &&
     state.bossProjectiles.length < entityCaps.bossProjectiles * 0.6 &&
     state.bossEffects.length < entityCaps.bossEffects * 0.6 &&
-    state.pickups.length < entityCaps.pickups * 0.5
+    state.pickups.length < entityCaps.pickups * 0.5 &&
+    state.lights.length < entityCaps.lights * 0.45 &&
+    state.explosions.length < entityCaps.explosions * 0.4 &&
+    state.wreckage.length < entityCaps.wreckage * 0.55
 
   if (!safelyBelowBudget) {
     state.effectsRecoveryClock = REDUCED_EFFECTS_RECOVERY_SECONDS
@@ -2297,7 +2363,8 @@ function updatePerformanceReadout(rawDt) {
       `PCK ${state.pickups.length} · ` +
       `PRT ${state.particles.length} · TXT ${state.floatingTexts.length} · ` +
       `FX ${state.rings.length} · VIS ${visibleEnemies}/${visiblePickups} · ` +
-      `Q ${reducedEffects ? 'LOW' : 'FULL'} · FT ${state.frameMs.toFixed(1)}MS`
+      `Q ${reducedEffects ? 'LOW' : 'FULL'} · FT ${state.frameMs.toFixed(1)}MS · ` +
+      `CPU ${state.workMs.toFixed(1)}MS`
   }
 }
 
@@ -2843,6 +2910,10 @@ function destroyHarvesterTitan() {
   audio.play('titanDestroyed')
   playHaptic([55, 35, 70], 'titan-destroyed', 1200)
   state.warningFlash = Math.max(state.warningFlash, 0.9)
+  createExplosion(boss.x, boss.y, {
+    scale: 3.2,
+    color: '#ff6538',
+  })
 
   // Scrapping the Titan immediately provides a short pressure-release surge.
   // The fixed permanent reward is added once when the run is finalized.
@@ -3469,7 +3540,29 @@ function fireAtNearestEnemy(target = findNearestEnemy()) {
     life: Math.max(1.25, distance / player.bulletSpeed + 0.4),
   })
   player.muzzleGlow = 0.11
+  player.muzzleVariant = Math.floor(Math.random() * 3)
+  player.recoil = Math.min(1, player.recoil + (surged ? 0.35 : 0.7))
+  state.camera.recoil = Math.min(3.5, state.camera.recoil + (surged ? 0.45 : 1.1))
   audio.play('arcShot')
+
+  addLight(bulletX, bulletY, surged ? '#ffbe46' : '#76f4ff', surged ? 62 : 48, 0.105, 0.85)
+  if (!reducedEffects && Math.random() > 0.28) {
+    const side = Math.random() > 0.5 ? 1 : -1
+    addParticle({
+      x: player.x - directionY * side * 7,
+      y: player.y + directionX * side * 7,
+      vx: -directionX * 35 - directionY * side * (75 + Math.random() * 35),
+      vy: -directionY * 35 + directionX * side * (75 + Math.random() * 35),
+      size: 3.2,
+      life: 0.55,
+      maxLife: 0.55,
+      color: '#d8b86d',
+      kind: 'shell',
+      gravity: 155,
+      rotation: player.angle,
+      spin: side * 12,
+    })
+  }
 
   createMuzzleEffect(
     player.x + directionX * 25,
@@ -3494,6 +3587,171 @@ function addRing(ring, important = false) {
   state.rings.push(ring)
 }
 
+function addLight(x, y, color, radius, life, intensity = 1) {
+  if (reducedEffects && intensity < 0.8) return
+  const cap = getVisualEffectCap('lights')
+  if (state.lights.length >= cap) state.lights.shift()
+  const bucketRadius = Math.max(48, Math.ceil(radius / 32) * 32)
+  const key = `${color}-${bucketRadius}`
+  let sprite = lightSpriteCache.get(key)
+  if (!sprite) {
+    const spriteScale = width < 760 ? 0.5 : 0.65
+    const size = Math.ceil(bucketRadius * 2 * spriteScale)
+    sprite = document.createElement('canvas')
+    sprite.width = size
+    sprite.height = size
+    const spriteContext = sprite.getContext('2d')
+    const center = size * 0.5
+    const gradient = spriteContext.createRadialGradient(center, center, 0, center, center, center)
+    gradient.addColorStop(0, `${color}52`)
+    gradient.addColorStop(0.28, `${color}21`)
+    gradient.addColorStop(1, `${color}00`)
+    spriteContext.fillStyle = gradient
+    spriteContext.fillRect(0, 0, size, size)
+    lightSpriteCache.set(key, sprite)
+  }
+  state.lights.push({
+    x,
+    y,
+    radius: bucketRadius,
+    life,
+    maxLife: life,
+    intensity,
+    sprite,
+  })
+}
+
+function addParticle(properties) {
+  if (state.particles.length >= getVisualEffectCap('particles')) return false
+  const particle = particlePool.pop() || {}
+  Object.assign(particle, properties)
+  particle.kind = properties.kind || 'spark'
+  particle.gravity = properties.gravity || 0
+  particle.rotation = properties.rotation || 0
+  particle.spin = properties.spin || 0
+  state.particles.push(particle)
+  return true
+}
+
+function addScorch(x, y, radius, strength = 1) {
+  const cap = getVisualEffectCap('scorches')
+  if (state.scorches.length >= cap) state.scorches.shift()
+  state.scorches.push({
+    x,
+    y,
+    radius,
+    rotation: Math.random() * TAU,
+    life: 22,
+    maxLife: 22,
+    strength,
+  })
+}
+
+function createExplosion(x, y, options = {}) {
+  const scale = options.scale || 1
+  const color = options.color || '#ff7a32'
+  const large = scale >= 1.65
+  const cap = getVisualEffectCap('explosions')
+  if (state.explosions.length >= cap) state.explosions.shift()
+  state.explosions.push({
+    x,
+    y,
+    scale,
+    color,
+    life: large ? 0.82 : 0.56,
+    maxLife: large ? 0.82 : 0.56,
+    seed: Math.random() * TAU,
+  })
+  addRing({
+    kind: 'shockwave',
+    x,
+    y,
+    radius: 5 * scale,
+    maxRadius: (large ? 78 : 48) * scale,
+    life: large ? 0.58 : 0.38,
+    maxLife: large ? 0.58 : 0.38,
+    color: large ? '#ffd18a' : color,
+  }, large)
+  if (!reducedEffects) {
+    addRing({
+      kind: 'heat',
+      x,
+      y,
+      radius: 10 * scale,
+      maxRadius: 38 * scale,
+      life: 0.42,
+      maxLife: 0.42,
+      color: '#ffbd72',
+    })
+  }
+  addLight(x, y, '#ff7738', 92 * scale, large ? 0.62 : 0.36, 1.25)
+  addScorch(x, y, Math.min(42, 15 * scale), large ? 1 : 0.7)
+
+  const baseCount = large ? 24 : 13
+  const count = Math.max(5, Math.round(baseCount * (reducedEffects ? 0.42 : 1)))
+  for (let index = 0; index < count; index += 1) {
+    const angle = Math.random() * TAU
+    const speed = (55 + Math.random() * (large ? 230 : 145)) * scale
+    const smoke = index % 6 === 0
+    const debris = index % 5 === 0
+    const life = smoke ? 0.7 + Math.random() * 0.55 : 0.28 + Math.random() * 0.45
+    addParticle({
+      x: x + Math.cos(angle) * Math.random() * 5 * scale,
+      y: y + Math.sin(angle) * Math.random() * 5 * scale,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      size: smoke ? 8 + Math.random() * 8 * scale : debris ? 3 + Math.random() * 4 : 1.5 + Math.random() * 2.5,
+      life,
+      maxLife: life,
+      color: smoke ? '#424442' : debris ? '#7d7770' : index % 3 === 0 ? '#ffd06a' : color,
+      kind: smoke ? 'smoke' : debris ? 'debris' : index % 4 === 0 ? 'ember' : 'spark',
+      gravity: debris ? 90 : smoke ? -7 : 24,
+      rotation: angle,
+      spin: (Math.random() - 0.5) * 13,
+    })
+  }
+  const distance = Math.hypot(state.player.x - x, state.player.y - y)
+  const falloff = Math.max(0, 1 - distance / 520)
+  if (falloff > 0) {
+    addScreenShake((large ? 7.5 : 2.8) * falloff)
+    state.camera.targetZoom = Math.min(1.025, 1 + 0.012 * scale * falloff)
+    const impulseAngle = Math.atan2(state.player.y - y, state.player.x - x)
+    state.camera.impulseX += Math.cos(impulseAngle) * scale * falloff * 2.4
+    state.camera.impulseY += Math.sin(impulseAngle) * scale * falloff * 2.4
+  }
+  state.hitStop = Math.max(
+    state.hitStop,
+    preferences.reducedFx || options.ambient ? 0 : large ? 0.045 : 0.018,
+  )
+  triggerImpactFlash('255, 133, 62', Math.min(0.45, 0.14 * scale * falloff))
+  audio.play(large ? 'explosionLarge' : 'explosion')
+}
+
+function createWreckage(enemy) {
+  const cap = getVisualEffectCap('wreckage')
+  const pieceCount = enemy.type === 'reclaimer' ? 7 : enemy.type === 'heavy' ? 5 : 3
+  const count = reducedEffects ? Math.min(3, pieceCount) : pieceCount
+  const baseAngle = enemy.hitDirection ?? enemy.angle + Math.PI
+  for (let index = 0; index < count; index += 1) {
+    if (state.wreckage.length >= cap) state.wreckage.shift()
+    const angle = baseAngle + (Math.random() - 0.5) * 1.7
+    const speed = 42 + Math.random() * (enemy.type === 'reclaimer' ? 155 : 100)
+    state.wreckage.push({
+      x: enemy.x,
+      y: enemy.y,
+      vx: Math.cos(angle) * speed + enemy.vx * 0.24,
+      vy: Math.sin(angle) * speed + enemy.vy * 0.24,
+      size: enemy.radius * (0.18 + Math.random() * 0.24),
+      rotation: Math.random() * TAU,
+      spin: (Math.random() - 0.5) * 9,
+      color: index === 0 ? enemy.color : '#333b3c',
+      life: 2.6 + Math.random() * 2.2,
+      maxLife: 4.8,
+      hot: index < 2,
+    })
+  }
+}
+
 function createMuzzleEffect(x, y, dx, dy, surged = false) {
   // Surged shots already have a bright projectile trail and muzzle flash. Avoid
   // allocating a ring and several particles for every high-rate shot.
@@ -3506,7 +3764,7 @@ function createMuzzleEffect(x, y, dx, dy, surged = false) {
     getVisualEffectCap('particles') - state.particles.length
   for (let i = 0; i < Math.min(particleCount, availableParticles); i += 1) {
     const spread = (Math.random() - 0.5) * 1.2
-    state.particles.push({
+    addParticle({
       x,
       y,
       vx: dx * (80 + Math.random() * 90) + spread * 50,
@@ -3515,6 +3773,7 @@ function createMuzzleEffect(x, y, dx, dy, surged = false) {
       life: 0.12 + Math.random() * 0.1,
       maxLife: 0.22,
       color: '#adfbff',
+      kind: 'spark',
     })
   }
 }
@@ -3528,7 +3787,7 @@ function createHitEffect(x, y, color = '#ffb064', count = 5) {
   for (let i = 0; i < Math.min(effectCount, availableParticles); i += 1) {
     const angle = Math.random() * TAU
     const speed = 35 + Math.random() * 135
-    state.particles.push({
+    addParticle({
       x,
       y,
       vx: Math.cos(angle) * speed,
@@ -3537,6 +3796,10 @@ function createHitEffect(x, y, color = '#ffb064', count = 5) {
       life: 0.14 + Math.random() * 0.22,
       maxLife: 0.36,
       color,
+      kind: i % 4 === 0 ? 'debris' : 'spark',
+      gravity: i % 4 === 0 ? 75 : 18,
+      rotation: angle,
+      spin: (Math.random() - 0.5) * 10,
     })
   }
 }
@@ -3573,7 +3836,36 @@ function destroyEnemy(enemy, suppressEffects = false) {
   enemy.dead = true
   state.kills += enemy.score
   audio.play('enemyDestroyed')
+  state.killConfirm = Math.max(state.killConfirm, enemy.type === 'reclaimer' ? 0.8 : 0.42)
+  createWreckage(enemy)
+  const shardCount = reducedEffects ? 1 : enemy.type === 'reclaimer' ? 5 : 2
+  for (let shard = 0; shard < shardCount; shard += 1) {
+    const angle = Math.random() * TAU
+    addParticle({
+      x: enemy.x,
+      y: enemy.y,
+      vx: Math.cos(angle) * (55 + Math.random() * 120),
+      vy: Math.sin(angle) * (55 + Math.random() * 120),
+      size: 2 + Math.random() * 2.5,
+      life: 0.42 + Math.random() * 0.28,
+      maxLife: 0.7,
+      color: shard % 2 ? '#70edf4' : '#71f397',
+      kind: 'debris',
+      gravity: 45,
+      rotation: angle,
+      spin: (Math.random() - 0.5) * 12,
+    })
+  }
   if (!suppressEffects) {
+    createExplosion(enemy.x, enemy.y, {
+      scale:
+        enemy.type === 'reclaimer'
+          ? 1.85
+          : enemy.type === 'heavy'
+            ? 1.28
+            : 0.72,
+      color: enemy.color,
+    })
     createHitEffect(
       enemy.x,
       enemy.y,
@@ -3589,6 +3881,21 @@ function destroyEnemy(enemy, suppressEffects = false) {
       maxLife: 0.28,
       color: enemy.color,
     })
+    if (enemy.type === 'reclaimer') {
+      addRing({
+        kind: 'energy',
+        x: enemy.x,
+        y: enemy.y,
+        radius: 8,
+        maxRadius: enemy.radius * 3.25,
+        life: 0.62,
+        maxLife: 0.62,
+        color: '#ff6fbe',
+      }, true)
+      addLight(enemy.x, enemy.y, '#ff4f98', 150, 0.72, 1.1)
+    }
+  } else {
+    addLight(enemy.x, enemy.y, enemy.color, enemy.radius * 2.4, 0.22, 0.72)
   }
 
   const resourceType = rollResourceDrop(enemy.type)
@@ -3697,6 +4004,16 @@ function spawnResourcePickup(type, source) {
     radius: resource.radius,
     phase: Math.random() * TAU,
     age: 0,
+    rarity:
+      type === 'reactor'
+        ? 'EXOTIC'
+        : type === 'battery'
+          ? 'RARE'
+          : type === 'gpu'
+            ? 'TECH'
+            : isValuableScrap
+              ? 'DENSE'
+              : '',
   })
 }
 
@@ -3706,6 +4023,7 @@ function collectGpu(pickup) {
   state.totalGpu += 1
   addMissionSalvage('gpu')
   createHitEffect(pickup.x, pickup.y, '#7dff9b', 16)
+  addLight(pickup.x, pickup.y, '#64ff94', 76, 0.34, 0.9)
   createFloatingText('+GPU', pickup.x, pickup.y - 12, '#92ffad', 0.9, 12, true)
   addRing({
     x: pickup.x,
@@ -3740,6 +4058,7 @@ function collectBattery(pickup) {
   addMissionSalvage('battery')
 
   createHitEffect(pickup.x, pickup.y, '#62ceff', 18)
+  addLight(pickup.x, pickup.y, '#58cfff', 84, 0.42, 1)
   createFloatingText('+BATTERY', pickup.x, pickup.y - 14, '#83dcff', 1, 12, true)
   addRing({
     x: player.x,
@@ -3758,6 +4077,7 @@ function collectScrap(pickup) {
   addMissionSalvage('scrap', pickup.value)
   createHitEffect(pickup.x, pickup.y, '#d9e1df', 5)
   createHitEffect(pickup.x, pickup.y, '#f0a056', 6)
+  addLight(pickup.x, pickup.y, '#f0a056', 48, 0.24, 0.65)
   createFloatingText(
     pickup.value > 1 ? `+${pickup.value} SCRAP` : '+SCRAP',
     pickup.x,
@@ -3799,6 +4119,7 @@ function collectReactor(pickup) {
 
   createHitEffect(pickup.x, pickup.y, '#ffc342', 24)
   createHitEffect(pickup.x, pickup.y, '#ff5a36', 14)
+  addLight(pickup.x, pickup.y, '#ff9e32', 150, 0.8, 1.3)
   createFloatingText(
     'REACTOR SURGE',
     pickup.x,
@@ -4111,6 +4432,7 @@ function updatePlayer(dt) {
   player.y = Math.max(player.radius + 8, Math.min(height - player.radius - 8, player.y))
   player.hitCooldown = Math.max(0, player.hitCooldown - dt)
   player.muzzleGlow = Math.max(0, player.muzzleGlow - dt)
+  player.recoil *= Math.pow(0.008, dt)
   player.rotorPhase += dt * 8
   if (player.shieldDecayDelay > 0) {
     player.shieldDecayDelay -= dt
@@ -4627,12 +4949,31 @@ function updateBullets(dt) {
       bullet.y =
         bullet.previousY + (bullet.y - bullet.previousY) * earliestHitTime
       bullet.life = 0
+      const hitDirection = Math.atan2(bullet.vy, bullet.vx)
+      hitTarget.hitDirection = hitDirection
       createHitEffect(
         bullet.x,
         bullet.y,
         '#ffd077',
         bullet.surged ? 2 : hitKind === 'obstacle' ? 4 : 6,
       )
+      if (!reducedEffects && (hitKind === 'obstacle' || hitKind === 'boss')) {
+        for (let spark = 0; spark < 2; spark += 1) {
+          const ricochetAngle = hitDirection + Math.PI + (Math.random() - 0.5) * 1.3
+          addParticle({
+            x: bullet.x,
+            y: bullet.y,
+            vx: Math.cos(ricochetAngle) * (120 + Math.random() * 110),
+            vy: Math.sin(ricochetAngle) * (120 + Math.random() * 110),
+            size: 1.4 + Math.random() * 1.4,
+            life: 0.18 + Math.random() * 0.16,
+            maxLife: 0.34,
+            color: '#fff0ae',
+            kind: 'spark',
+            gravity: 42,
+          })
+        }
+      }
 
       if (hitKind === 'obstacle') {
         applyObstacleDamage(hitTarget, bullet.damage)
@@ -4738,7 +5079,6 @@ function updateObstacles(dt) {
 }
 
 function updateEffects(dt) {
-  const particleDamping = Math.pow(0.07, dt)
   const particleDecay = dt * (reducedEffects ? 1.5 : 1)
   const particles = state.particles
   let particleWriteIndex = 0
@@ -4746,12 +5086,19 @@ function updateEffects(dt) {
     const particle = particles[index]
     particle.x += particle.vx * dt
     particle.y += particle.vy * dt
+    particle.vy += particle.gravity * dt
+    const dampingBase = particle.kind === 'smoke' ? 0.32 : particle.kind === 'shell' ? 0.48 : 0.07
+    const particleDamping = Math.pow(dampingBase, dt)
     particle.vx *= particleDamping
     particle.vy *= particleDamping
+    particle.rotation += particle.spin * dt
+    if (particle.kind === 'smoke') particle.size += dt * 8
     particle.life -= particleDecay
     if (particle.life > 0) {
       particles[particleWriteIndex] = particle
       particleWriteIndex += 1
+    } else if (particlePool.length < entityCaps.particles) {
+      particlePool.push(particle)
     }
   }
   particles.length = particleWriteIndex
@@ -4811,6 +5158,77 @@ function updateEffects(dt) {
   floatingTexts.length = textWriteIndex
   const floatingTextCap = getVisualEffectCap('floatingTexts')
   trimOldestInPlace(floatingTexts, floatingTextCap)
+
+  const explosions = state.explosions
+  let explosionWriteIndex = 0
+  for (let index = 0; index < explosions.length; index += 1) {
+    const explosion = explosions[index]
+    explosion.life -= dt * (reducedEffects ? 1.25 : 1)
+    if (explosion.life > 0) {
+      explosions[explosionWriteIndex] = explosion
+      explosionWriteIndex += 1
+    }
+  }
+  explosions.length = explosionWriteIndex
+  trimOldestInPlace(explosions, getVisualEffectCap('explosions'))
+
+  const lights = state.lights
+  let lightWriteIndex = 0
+  for (let index = 0; index < lights.length; index += 1) {
+    const light = lights[index]
+    light.life -= dt * (reducedEffects ? 1.5 : 1)
+    if (light.life > 0) {
+      lights[lightWriteIndex] = light
+      lightWriteIndex += 1
+    }
+  }
+  lights.length = lightWriteIndex
+  trimOldestInPlace(lights, getVisualEffectCap('lights'))
+
+  const wreckage = state.wreckage
+  let wreckageWriteIndex = 0
+  const wreckageDamping = Math.pow(0.1, dt)
+  for (let index = 0; index < wreckage.length; index += 1) {
+    const piece = wreckage[index]
+    piece.x += piece.vx * dt
+    piece.y += piece.vy * dt
+    piece.vx *= wreckageDamping
+    piece.vy *= wreckageDamping
+    piece.rotation += piece.spin * dt
+    piece.life -= dt * (reducedEffects ? 1.35 : 1)
+    if (piece.life > 0) {
+      wreckage[wreckageWriteIndex] = piece
+      wreckageWriteIndex += 1
+    }
+  }
+  wreckage.length = wreckageWriteIndex
+  trimOldestInPlace(wreckage, getVisualEffectCap('wreckage'))
+
+  const scorches = state.scorches
+  let scorchWriteIndex = 0
+  for (let index = 0; index < scorches.length; index += 1) {
+    const scorch = scorches[index]
+    scorch.life -= dt
+    if (scorch.life > 0) {
+      scorches[scorchWriteIndex] = scorch
+      scorchWriteIndex += 1
+    }
+  }
+  scorches.length = scorchWriteIndex
+  trimOldestInPlace(scorches, getVisualEffectCap('scorches'))
+
+  const camera = state.camera
+  const driftScale = preferences.reducedFx ? 0 : 0.55
+  const targetX = Math.sin(state.elapsed * 0.31) * driftScale + camera.impulseX
+  const targetY = Math.cos(state.elapsed * 0.27) * driftScale + camera.impulseY
+  const follow = 1 - Math.pow(0.002, dt)
+  camera.x += (targetX - camera.x) * follow
+  camera.y += (targetY - camera.y) * follow
+  camera.impulseX *= Math.pow(0.012, dt)
+  camera.impulseY *= Math.pow(0.012, dt)
+  camera.recoil *= Math.pow(0.004, dt)
+  camera.targetZoom += (1 - camera.targetZoom) * (1 - Math.pow(0.03, dt))
+  camera.zoom += (camera.targetZoom - camera.zoom) * (1 - Math.pow(0.005, dt))
   state.warningFlash = Math.max(0, state.warningFlash - dt * 1.8)
   state.impactFlash = Math.max(0, state.impactFlash - dt * 3.8)
   state.surgeActivationPulse = Math.max(
@@ -4822,12 +5240,32 @@ function updateEffects(dt) {
     state.extractionCallPulse - dt * 1.4,
   )
   state.shake = Math.max(0, state.shake - dt * 24)
+  state.killConfirm = Math.max(0, state.killConfirm - dt * 2.8)
+}
+
+function updateEnvironment(dt) {
+  state.environmentClock -= dt
+  if (state.environmentClock > 0 || reducedEffects) return
+  state.environmentClock = 6 + Math.random() * 9
+  const side = Math.floor(Math.random() * 4)
+  const x = side === 1 ? width - 20 : side === 3 ? 20 : Math.random() * width
+  const y = side === 0 ? 18 : side === 2 ? height - 18 : Math.random() * height
+  createExplosion(x, y, {
+    scale: 0.7 + Math.random() * 0.45,
+    color: '#d76535',
+    ambient: true,
+  })
 }
 
 function update(dt, wallDt = dt) {
   if (state.mode === 'paused') return
   if (state.mode !== 'running') {
     updateEffects(wallDt)
+    return
+  }
+
+  if (state.hitStop > 0) {
+    state.hitStop = Math.max(0, state.hitStop - wallDt)
     return
   }
 
@@ -4838,6 +5276,7 @@ function update(dt, wallDt = dt) {
   state.introClock -= dt
   if (state.introClock <= 0) ui.onboardingHint.classList.add('is-hidden')
   updateContextHints(dt)
+  updateEnvironment(dt)
   state.hudClock -= wallDt
   updateObstacles(dt)
   updatePlayer(dt)
@@ -4950,10 +5389,10 @@ function drawBackground() {
   for (let i = 0; i < ambientDust.length; i += dustStep) {
     const dust = ambientDust[i]
     const dustX =
-      (dust.x + state.elapsed * dust.speed + Math.sin(state.elapsed + dust.phase) * dust.drift) %
+      (dust.x + state.elapsed * dust.speed + Math.sin(state.elapsed + dust.phase) * dust.drift - state.player.moveX * dust.drift * 0.7) %
       width
     const dustY =
-      (dust.y + state.elapsed * dust.speed * 0.34 + Math.cos(state.elapsed * 0.7 + dust.phase) * 5) %
+      (dust.y + state.elapsed * dust.speed * 0.34 + Math.cos(state.elapsed * 0.7 + dust.phase) * 5 - state.player.moveY * dust.drift * 0.5) %
       height
     ctx.globalAlpha =
       dust.opacity * (0.82 + Math.sin(state.elapsed * 0.72 + dust.phase) * 0.18)
@@ -4962,7 +5401,125 @@ function drawBackground() {
   }
   ctx.globalAlpha = 1
   drawSectorAtmosphere()
+  if (!reducedEffects) {
+    ctx.save()
+    ctx.globalCompositeOperation = 'screen'
+    const shaftPhase = Math.sin(state.elapsed * 0.12) * width * 0.03
+    ctx.globalAlpha = 0.025
+    ctx.fillStyle = getSector().visual.accent
+    ctx.beginPath()
+    ctx.moveTo(width * 0.08 + shaftPhase, 0)
+    ctx.lineTo(width * 0.29 + shaftPhase, 0)
+    ctx.lineTo(width * 0.53 + shaftPhase, height)
+    ctx.lineTo(width * 0.34 + shaftPhase, height)
+    ctx.closePath()
+    ctx.fill()
+    ctx.globalAlpha = 0.018
+    ctx.beginPath()
+    ctx.moveTo(width * 0.72 - shaftPhase, 0)
+    ctx.lineTo(width * 0.82 - shaftPhase, 0)
+    ctx.lineTo(width * 0.69 - shaftPhase, height)
+    ctx.lineTo(width * 0.57 - shaftPhase, height)
+    ctx.closePath()
+    ctx.fill()
+    ctx.restore()
+  }
   ctx.drawImage(vignetteLayer, 0, 0, width, height)
+}
+
+function drawScorches() {
+  for (const scorch of state.scorches) {
+    const fade = Math.min(1, scorch.life / 3)
+    ctx.save()
+    ctx.translate(scorch.x, scorch.y)
+    ctx.rotate(scorch.rotation)
+    ctx.globalAlpha = fade * 0.46 * scorch.strength
+    ctx.fillStyle = '#030303'
+    ctx.beginPath()
+    ctx.ellipse(0, 0, scorch.radius, scorch.radius * 0.62, 0, 0, TAU)
+    ctx.fill()
+    ctx.globalAlpha *= 0.42
+    ctx.strokeStyle = '#8b3d22'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(0, 0, scorch.radius * 0.72, 0.2, 4.7)
+    ctx.stroke()
+    ctx.restore()
+  }
+}
+
+function drawDynamicLights() {
+  if (reducedEffects && state.lights.length === 0) return
+  ctx.save()
+  ctx.globalCompositeOperation = 'screen'
+  for (const light of state.lights) {
+    if (light.x + light.radius < 0 || light.x - light.radius > width || light.y + light.radius < 0 || light.y - light.radius > height) continue
+    const alpha = Math.max(0, light.life / light.maxLife) * light.intensity
+    ctx.globalAlpha = Math.min(1, alpha)
+    ctx.drawImage(
+      light.sprite,
+      light.x - light.radius,
+      light.y - light.radius,
+      light.radius * 2,
+      light.radius * 2,
+    )
+  }
+  const enemyStep = reducedEffects ? 5 : state.enemies.length > 55 ? 3 : 2
+  for (let index = 0; index < state.enemies.length; index += enemyStep) {
+    const enemy = state.enemies[index]
+    if (enemy.dead || enemy.x < -30 || enemy.x > width + 30 || enemy.y < -30 || enemy.y > height + 30) continue
+    ctx.globalAlpha = enemy.type === 'reclaimer' ? 0.12 : 0.055
+    ctx.fillStyle = enemy.color
+    ctx.beginPath()
+    ctx.arc(enemy.x, enemy.y, enemy.radius * (enemy.type === 'reclaimer' ? 1.7 : 1.15), 0, TAU)
+    ctx.fill()
+  }
+  ctx.restore()
+}
+
+function drawWreckage() {
+  for (const piece of state.wreckage) {
+    const alpha = Math.min(1, piece.life / 0.8)
+    ctx.save()
+    ctx.translate(piece.x, piece.y)
+    ctx.rotate(piece.rotation)
+    ctx.globalAlpha = alpha
+    if (piece.hot && !reducedEffects) {
+      ctx.shadowColor = piece.color
+      ctx.shadowBlur = 8 * Math.min(1, piece.life)
+    }
+    ctx.fillStyle = piece.color
+    ctx.fillRect(-piece.size, -piece.size * 0.38, piece.size * 2, piece.size * 0.76)
+    ctx.fillStyle = '#111718'
+    ctx.fillRect(-piece.size * 0.45, -piece.size * 0.2, piece.size * 0.7, piece.size * 0.4)
+    ctx.restore()
+  }
+}
+
+function drawExplosions() {
+  ctx.save()
+  ctx.globalCompositeOperation = 'screen'
+  for (const explosion of state.explosions) {
+    const progress = 1 - explosion.life / explosion.maxLife
+    const fade = Math.max(0, explosion.life / explosion.maxLife)
+    const radius = (8 + progress * 32) * explosion.scale
+    for (let layer = 0; layer < 3; layer += 1) {
+      const angle = explosion.seed + layer * 2.1
+      const offset = progress * 7 * explosion.scale
+      ctx.globalAlpha = fade * (0.62 - layer * 0.12)
+      ctx.fillStyle = layer === 0 ? '#fff0ad' : layer === 1 ? '#ff9a3d' : explosion.color
+      ctx.beginPath()
+      ctx.arc(
+        explosion.x + Math.cos(angle) * offset,
+        explosion.y + Math.sin(angle) * offset,
+        radius * (0.58 + layer * 0.19),
+        0,
+        TAU,
+      )
+      ctx.fill()
+    }
+  }
+  ctx.restore()
 }
 
 function drawObstacleHealthBar(obstacle) {
@@ -5194,6 +5751,15 @@ function drawPickup(pickup) {
   else if (pickup.type === 'battery') drawBatteryPickup(pickup)
   else if (pickup.type === 'scrap') drawScrapPickup(pickup)
   else if (pickup.type === 'reactor') drawReactorPickup(pickup)
+
+  if (pickup.rarity) {
+    ctx.globalAlpha = 0.5 + Math.sin(pickup.phase * 1.4) * 0.18
+    ctx.fillStyle = resourceTypes[pickup.type].color
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'bottom'
+    ctx.font = '600 7px ui-monospace, monospace'
+    ctx.fillText(pickup.rarity, 0, -pickup.radius - 17)
+  }
 
   ctx.restore()
 }
@@ -5719,21 +6285,29 @@ function drawBullets() {
   ctx.lineCap = 'round'
   ctx.lineWidth = width < 700 ? 4.5 : 3.6
   ctx.shadowBlur = 0
-  for (const bullet of state.bullets) {
-    const trailColor = bullet.surged ? '255, 205, 76' : '150, 250, 255'
-    ctx.strokeStyle = `rgba(${trailColor}, 0.72)`
+  for (const surged of [false, true]) {
+    ctx.strokeStyle = surged
+      ? 'rgba(255, 205, 76, 0.72)'
+      : 'rgba(150, 250, 255, 0.72)'
     ctx.beginPath()
-    ctx.moveTo(bullet.previousX, bullet.previousY)
-    ctx.lineTo(bullet.x, bullet.y)
+    for (const bullet of state.bullets) {
+      if (bullet.surged !== surged) continue
+      ctx.moveTo(bullet.previousX, bullet.previousY)
+      ctx.lineTo(bullet.x, bullet.y)
+    }
     ctx.stroke()
   }
 
-  ctx.shadowBlur = reducedEffects ? 0 : 14
-  for (const bullet of state.bullets) {
-    ctx.shadowColor = bullet.surged ? '#ffbd3d' : '#75f5ff'
-    ctx.fillStyle = bullet.surged ? '#fff0a1' : '#d6fdff'
+  for (const surged of [false, true]) {
+    ctx.shadowBlur = reducedEffects ? 0 : 14
+    ctx.shadowColor = surged ? '#ffbd3d' : '#75f5ff'
+    ctx.fillStyle = surged ? '#fff0a1' : '#d6fdff'
     ctx.beginPath()
-    ctx.arc(bullet.x, bullet.y, bullet.radius, 0, TAU)
+    for (const bullet of state.bullets) {
+      if (bullet.surged !== surged) continue
+      ctx.moveTo(bullet.x + bullet.radius, bullet.y)
+      ctx.arc(bullet.x, bullet.y, bullet.radius, 0, TAU)
+    }
     ctx.fill()
   }
   ctx.shadowBlur = 0
@@ -5788,7 +6362,10 @@ function drawPlayer() {
   const tilt = player.moveX * 0.07
 
   ctx.save()
-  ctx.translate(player.x, player.y)
+  ctx.translate(
+    player.x - Math.cos(player.angle) * player.recoil * 5,
+    player.y - Math.sin(player.angle) * player.recoil * 5,
+  )
   ctx.rotate(player.angle + tilt)
 
   if (player.hitCooldown > 0) {
@@ -5917,8 +6494,11 @@ function drawPlayer() {
     ctx.fillStyle = surged ? '#fff1a3' : '#eaffff'
     ctx.beginPath()
     ctx.moveTo(30, 0)
-    ctx.lineTo(43 + glowStrength * 7, -6)
-    ctx.lineTo(43 + glowStrength * 7, 6)
+    const flashLength = 43 + glowStrength * (player.muzzleVariant === 1 ? 12 : 7)
+    const flashWidth = player.muzzleVariant === 2 ? 9 : 6
+    ctx.lineTo(flashLength, -flashWidth)
+    ctx.lineTo(flashLength - (player.muzzleVariant === 1 ? 6 : 0), 0)
+    ctx.lineTo(flashLength, flashWidth)
     ctx.closePath()
     ctx.fill()
     ctx.globalAlpha = 1
@@ -5932,7 +6512,7 @@ function drawEffects() {
     const ringAlpha = Math.max(0, ring.life / ring.maxLife)
     ctx.globalAlpha = ringAlpha
     ctx.strokeStyle = ring.color
-    ctx.lineWidth = ring.kind === 'emp' ? 3 : 2
+    ctx.lineWidth = ring.kind === 'emp' ? 3 : ring.kind === 'shockwave' ? 3.2 : 2
     if (ring.kind === 'emp') {
       ctx.shadowColor = ring.color
       ctx.shadowBlur = reducedEffects ? 0 : ring.bright ? 16 : 9
@@ -5940,6 +6520,15 @@ function drawEffects() {
     ctx.beginPath()
     ctx.arc(ring.x, ring.y, ring.currentRadius || ring.radius, 0, TAU)
     ctx.stroke()
+    if (ring.kind === 'heat' && !reducedEffects) {
+      ctx.globalAlpha = ringAlpha * 0.14
+      ctx.globalCompositeOperation = 'screen'
+      ctx.lineWidth = 7
+      ctx.beginPath()
+      ctx.arc(ring.x + Math.sin(ringAlpha * 18) * 2, ring.y, (ring.currentRadius || ring.radius) * 0.92, 0, TAU)
+      ctx.stroke()
+      ctx.globalCompositeOperation = 'source-over'
+    }
     if (ring.kind === 'emp') {
       ctx.globalAlpha = ringAlpha * 0.38
       ctx.lineWidth = 1
@@ -5960,15 +6549,28 @@ function drawEffects() {
   ctx.shadowBlur = reducedEffects ? 0 : 6
   for (const particle of state.particles) {
     const alpha = Math.max(0, particle.life / particle.maxLife)
-    ctx.globalAlpha = alpha
+    ctx.globalAlpha = particle.kind === 'smoke' ? alpha * 0.32 : alpha
     ctx.fillStyle = particle.color
     ctx.shadowColor = particle.color
-    ctx.fillRect(
-      particle.x - particle.size / 2,
-      particle.y - particle.size / 2,
-      particle.size,
-      particle.size,
-    )
+    if (particle.kind === 'smoke') {
+      ctx.shadowBlur = 0
+      ctx.beginPath()
+      ctx.arc(particle.x, particle.y, particle.size * 0.65, 0, TAU)
+      ctx.fill()
+    } else {
+      ctx.save()
+      ctx.translate(particle.x, particle.y)
+      ctx.rotate(particle.rotation)
+      if (particle.kind === 'spark' || particle.kind === 'ember') {
+        ctx.fillRect(-particle.size * 1.5, -particle.size * 0.3, particle.size * 3, particle.size * 0.6)
+      } else if (particle.kind === 'shell') {
+        ctx.fillRect(-particle.size, -particle.size * 0.34, particle.size * 2, particle.size * 0.68)
+      } else {
+        ctx.fillRect(-particle.size * 0.7, -particle.size * 0.45, particle.size * 1.4, particle.size * 0.9)
+      }
+      ctx.restore()
+      ctx.shadowBlur = reducedEffects ? 0 : 6
+    }
   }
   ctx.globalAlpha = 1
   ctx.shadowBlur = 0
@@ -5986,6 +6588,28 @@ function drawEffects() {
   }
   ctx.globalAlpha = 1
   ctx.shadowBlur = 0
+}
+
+function drawKillConfirmation() {
+  if (state.killConfirm <= 0) return
+  const alpha = Math.min(1, state.killConfirm * 2.5)
+  const size = 7 + (1 - alpha) * 5
+  ctx.save()
+  ctx.translate(width * 0.5, height * 0.5)
+  ctx.globalAlpha = alpha * 0.72
+  ctx.strokeStyle = '#d8ffff'
+  ctx.lineWidth = 1.5
+  ctx.beginPath()
+  ctx.moveTo(-size, -size)
+  ctx.lineTo(-2, -2)
+  ctx.moveTo(size, -size)
+  ctx.lineTo(2, -2)
+  ctx.moveTo(-size, size)
+  ctx.lineTo(-2, 2)
+  ctx.moveTo(size, size)
+  ctx.lineTo(2, 2)
+  ctx.stroke()
+  ctx.restore()
 }
 
 function drawSurgePulse() {
@@ -6117,25 +6741,36 @@ function render() {
   drawSurgePulse()
   ctx.save()
   const shakeAmount = state.mode === 'running' ? state.shake : 0
-  const shakeX = shakeAmount ? (Math.random() - 0.5) * shakeAmount : 0
-  const shakeY = shakeAmount ? (Math.random() - 0.5) * shakeAmount : 0
-  ctx.translate(shakeX, shakeY)
+  const shakeX = shakeAmount ? Math.sin(state.elapsed * 91) * shakeAmount * 0.52 : 0
+  const shakeY = shakeAmount ? Math.cos(state.elapsed * 77) * shakeAmount * 0.42 : 0
+  const camera = state.camera
+  ctx.translate(width * 0.5 + camera.x + shakeX, height * 0.5 + camera.y + shakeY)
+  ctx.scale(camera.zoom, camera.zoom)
+  ctx.translate(
+    -width * 0.5 - Math.cos(state.player.angle) * camera.recoil,
+    -height * 0.5 - Math.sin(state.player.angle) * camera.recoil,
+  )
+  drawScorches()
+  drawDynamicLights()
   drawExtractionBeacon()
   drawObstacles()
   state.pickups.forEach(drawPickup)
   drawTitanMines()
+  drawWreckage()
   state.enemies.forEach(drawEnemy)
   drawHarvesterTitan()
   drawTitanProjectiles()
   drawBullets()
   drawOrbitDrones()
   drawPlayer()
+  drawExplosions()
   drawTitanEffects()
   drawEffects()
   ctx.restore()
   drawTouchControl()
   drawExtractionBorder()
   drawImpactFlash()
+  drawKillConfirmation()
 
   if (state.warningFlash > 0) {
     const alpha = state.warningFlash * 0.13
@@ -6148,6 +6783,7 @@ function render() {
 }
 
 function gameLoop(now) {
+  const workStarted = performance.now()
   const rawDt = Math.max(0, (now - lastFrame) / 1000)
   lastFrame = now
   updatePerformanceReadout(rawDt)
@@ -6160,6 +6796,17 @@ function gameLoop(now) {
   const wallDt = Math.min(rawDt, 0.2)
   update(dt, wallDt)
   render()
+  const workMs = performance.now() - workStarted
+  state.workMs += (workMs - state.workMs) * 0.08
+  performanceMetrics.fps = state.fps
+  performanceMetrics.frameMs = state.frameMs
+  performanceMetrics.workMs = state.workMs
+  performanceMetrics.quality = reducedEffects ? 'adaptive' : 'full'
+  performanceMetrics.particles = state.particles.length
+  performanceMetrics.enemies = state.enemies.length
+  performanceMetrics.bullets = state.bullets.length
+  performanceMetrics.lights = state.lights.length
+  performanceMetrics.explosions = state.explosions.length
   requestAnimationFrame(gameLoop)
 }
 
